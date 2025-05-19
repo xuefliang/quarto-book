@@ -1,0 +1,56 @@
+project:
+  type: book
+  output-dir: _book
+
+lang: zh
+
+book:
+  title: "Quarto 中文书籍模版"
+  author: "梁雪枫"
+  date: "05/19/2025"
+  output-file: "_main"
+  chapters:
+    - index.qmd
+    - part: data-preperation.qmd
+      chapters:
+        - intro.qmd
+    - references.qmd
+  appendices:
+    - appendix-a.qmd
+  repo-branch: main
+  search: true
+
+bibliography: references.bib
+
+format:
+  html:
+    theme: cosmo
+    code-link: true
+    code-line-numbers: true
+    include-in-header:
+      - header.html
+  pdf:
+    documentclass: book
+    include-in-header: preamble.tex
+    classoption: [UTF8,twoside,openany,table]
+    keep-tex: true
+    lof: true
+    lot: true
+    geometry:
+      - tmargin=2.5cm
+      - bmargin=2.5cm
+      - lmargin=3.0cm
+      - rmargin=2.0cm
+    highlight-style: github
+    number-sections: true
+    top-level-division: chapter
+    colorlinks: true
+    mathspec: true
+    link-citations: true
+    crossref:
+      chapters: true
+  docx:
+    toc: true
+    toc-depth: 3
+    crossref:
+      chapters: true
