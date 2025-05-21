@@ -1,0 +1,69 @@
+# 线性混合模型 
+
+## 数据
+penicillin数据集来源于青霉素的产生，有3个变量。
+```{r}
+data(penicillin,package = 'faraway')
+
+var_desc <- data.frame(
+  变量名 = names(penicillin),
+  描述 = c(
+    "生产类型（具有 4 个水平的系数）",
+    "用于生产的混料（具有 5 个水平的因子）",
+    "青霉素的生产量"
+  )
+)
+
+# 将生产类型的参考水平设置为 D 
+penicillin$treat <- relevel(penicillin$treat, "D")
+
+kable(var_desc) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, monospace = TRUE) %>%
+  column_spec(2)
+```
+
+## inla实现
+生产方法(treat)作为固定效应纳入模型,混合物批次(blend)代表了更大总体的随机样本，因为不关心具体哪种混合物批次效果更好，需要控制但不量化这种变异，将源混合物批次作为随机效应纳入模型。
+```{r}
+# 参数为 0.001和 0.001的精度的Gamma先验,在定义潜在随机效应时使用
+prec.prior <- list(prec = list(param = c(0.001, 0.001)))
+penicillin_inla <- inla(yield ~ 1 + treat + f(blend, model = "iid",
+    hyper = prec.prior),
+  data = penicillin, control.predictor = list(compute = TRUE))
+summary(penicillin_inla)
+```
+
+## brms实现
+INLA的先验设置为精度(precision)，而brms设置为标准差(sd)或方差(sigma²),# 在brms中，随机效应使用(1|group)语法.
+
+```{R}
+#| echo: true
+#| eval: false
+
+
+prior_specs <- c(
+  # 对随机效应方差的先验
+  prior(inv_gamma(0.001, 0.001), class = "sd", group = "blend"),
+  # 如果需要，也可以设置固定效应和截距的先验
+  prior(normal(0, 100), class = "Intercept"),
+  prior(normal(0, 10), class = "b")
+)
+
+
+penicillin_brms <- brm(
+  formula = yield ~ 1 + treat + (1|blend),
+  data = penicillin,
+  family = gaussian(),
+  prior = prior_specs,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  control = list(adapt_delta = 0.9),
+  seed = 123
+)
+
+summary(penicillin_brms)
+```
+
+brms拟合结果类似与INLA。

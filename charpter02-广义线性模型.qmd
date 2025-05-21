@@ -1,0 +1,287 @@
+# 广义线性模型
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(brms)
+library(INLA)
+library(inlabru)
+# remotes::install_github("julianfaraway/brinla")
+library(brinla)
+library(bayesplot)
+library(INLAspacetime)
+library(haven)
+# library(betareg)
+library(knitr)
+library(kableExtra)
+```
+
+## 二元响应变量
+
+### 数据
+stroke数据来自一项针对住院卒中患者的研究。数据集包含226个入院患者的的7个变量。
+
+```{r}
+stroke <- read_dta("data/stroke.dta") |>  
+  mutate(across(where(is.labelled), as_factor)) |> 
+  zap_labels() |> 
+  mutate(stroke_type = relevel(stroke_type, ref = "Ischaemic Stroke"),
+  sex=relevel(sex,ref="female")) |> 
+  as_tibble()
+
+var_desc <- data.frame(
+  变量名 = names(stroke),
+  描述 = c(
+    "性别：女性或男性",
+    "住院期间的患者状态 （存活或死亡）",
+    "入院时格拉斯哥昏迷评分（范围从 3 到 15）",
+    "收缩压 （mmHg）",
+    "糖尿病史（是或否）",
+    "入院患者年龄",
+    "IS（缺血性中风）或 HS（出血性中风）"
+  )
+)
+
+kable(var_desc) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, monospace = TRUE) %>%
+  column_spec(2)
+```
+
+### inla实现
+inla 对响应变量的类型要求为数值，需要对stroke数据格式进行转换，0为存活，1为死亡。family = "binomial", 指定响应变量服从二项分布，Ntrials = 1指定每个观测的试验次数为1，建立了一个标准的二分类logistic回归模型，
+```{r}
+stroke |> 
+  mutate(status=as.numeric(status)) |>
+  mutate(status=case_when(status==1 ~0,status==2 ~1))-> stroke
+
+formula <- status ~ gcs+sex+sbp+age+dm+stroke_type
+stroke_inla <- inla(formula, data = stroke,family = "binomial",Ntrials = 1)
+summary(stroke_inla)
+plot(stroke_inla)
+```
+
+stroke_type(卒中类型): 1.31 (95%CI: -0.46 to -2.18)显著为负，相对于缺血性的出血性卒中风险明显更高。gcs(格拉斯哥昏迷量表): -0.35 (95%CI: -0.47 to -0.24)，显著为正，表明GCS每增加1分，患者不良结局死亡的对数几率增加0.35，不良结局风险越低。其余变量无显著性差异。
+
+### brms实现
+```{r}
+#| echo: true
+#| eval: false
+
+formula <- status ~ gcs+sex+sbp+age+dm+stroke_type
+stroke_brms <- brm(formula, data = stroke,family = bernoulli(),refresh = 0,silent = TRUE)
+summary(stroke_brms)
+# plot(stroke_brms)
+```
+
+中风类型(stroke_type1)和gcs的结果与inla拟合结果类似。
+
+## 计数响应变量
+
+### 数据
+asthma数据来自120 名哮喘患者，有4个变量。
+
+```{r}
+asthma = read.csv("data/asthma.csv")
+
+var_desc <- data.frame(
+  变量名 = names(asthma),
+  描述 = c(
+    "性别，女性或男性",
+    "重复呼吸道感染，有或无",
+    "健康问卷（GHQ-12）心理健康得分（数值）",
+    "每年哮喘发作次数（计数）"
+  )
+)
+
+kable(var_desc) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, monospace = TRUE) %>%
+  column_spec(2)
+```
+
+### inla实现
+```{r}
+formula <- attack ~ gender + res_inf * ghq12
+attack_inla <- inla(formula, data = asthma,family = "poisson")
+summary(attack_inla)
+# plot(attack_inla)
+```
+
+存在重复感染时，结局的对数几率增加1.03。GHQ-12每增加1分，结局发生的对数几率增加0.07。重复感染与GHQ-12之间存在微弱但显著的负向交互作用。
+
+### brms实现
+```{r}
+#| echo: true
+#| eval: false
+
+formula <- attack ~ gender + res_inf * ghq12
+attack_brms <- brm(formula, data = asthma,family = poisson(),refresh = 0,silent = TRUE)
+summary(attack_brms)
+# plot(attack_brms)
+```
+
+brms估计的结果与inla结果类似。
+
+## 率响应变量
+### 数据
+asthma数据来自肺癌病例数据，有4个变量。
+
+```{r}
+smoke <- read.csv("data/smoke.csv")
+
+var_desc <- data.frame(
+  变量名 = names(smoke),
+  描述 = c(
+    "吸烟年数的分类",
+    "每日香烟数量（数值）",
+    "人年数",
+    "肺癌病例数"
+  )
+)
+
+#查看观察到的比率
+# smoke %>% mutate(rate = round(case/person_yrs, 4))
+
+kable(var_desc) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, monospace = TRUE) %>%
+  column_spec(2)
+```
+
+### inla实现
+```{r}
+formula <- case ~ cigar_day + smoke_yrs
+smoke_inla <- inla(formula, data = smoke,family = "poisson",
+offset = log(person_yrs))
+summary(smoke_inla)
+# plot(smoke_inla)
+```
+基线风险 (Intercept)系数：-11.772（95%CI：-13.713至-9.831），在控制其他因素的情况下，基线对数几率非常低，表明在不吸烟的情况下，疾病风险极低。每日吸烟量效应 (cigar_day)系数：0.065（95%CI：0.053至0.078）每增加一支烟/天，疾病的对数几率增加0.065。吸烟年限越长，疾病风险越高，且呈现非线性增长临界点：在30年左右出现风险的显著跃升（此时可信区间不再包含0），长期吸烟的巨大风险：吸烟超过50年的人群，疾病风险是不吸烟人群的200倍以上。
+
+### brms实现
+```{r}
+#| echo: true
+#| eval: false
+
+formula <- case ~ cigar_day + smoke_yrs
+smoke_brms <- brm(formula, data = smoke,family = poisson(),
+offset = log(person_yrs)，refresh = 0,silent = TRUE)
+summary(smoke_brms)
+# plot(smoke_brms)
+```
+
+brms建模的结果和INLA类似。
+
+## 比例响应变量
+
+### 数据
+数据来源于 `betareg`包，是Smithson & Verkuilen的小学生的准确性分数
+```{r}
+data("ReadingSkills", package = "betareg")
+
+var_desc <- data.frame(
+  变量名 = names(ReadingSkills),
+  描述 = c(
+    "阅读分数,最大限制为0.99",
+    "是否有读写障碍",
+    "智商得分，转为Z得分",
+    "未受限制的阅读分数，最大为1"
+  )
+)
+
+kable(var_desc) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, monospace = TRUE) %>%
+  column_spec(2)
+```
+
+### inla实现
+```{r}
+formula <- accuracy ~  dyslexia + iq + dyslexia * iq
+Reading_inla <- inla(formula, data = ReadingSkills,family = "beta")
+summary(Reading_inla)
+# plot(Reading_inla)
+```
+
+在控制IQ后，有阅读障碍(dyslexia)的个体阅读表现显著降低。IQ的可信区间包含零，表明这种效应在统计上不显著。交互作用 (dyslexia:iq)包含0，表明交互作用不显著。
+
+### brms实现
+```{r}
+#| echo: true
+#| eval: false
+
+formula <- accuracy ~  dyslexia + iq + dyslexia * iq
+Reading_brms <- brm(formula, data = ReadingSkills,family = brms::Beta())
+summary(Reading_brms)
+# plot(Reading_brms)
+```
+
+brms拟合结果类似与INLA。
+
+## 零膨胀响应变量
+
+响应变量为计数且包含过多零值时，通过同时建模"零概率"和"计数"两个过程。
+
+### 数据
+数据来源于 `brinla`包，研究了科学家发表文章的数量。
+```{r}
+data("articles", package = "brinla")
+
+var_desc <- data.frame(
+  变量名 = names(articles),
+  描述 = c(
+    "性别",
+    "导师发表的文章数量",
+    "项目声望",
+    "婚姻状况",
+    "5岁以下孩子数量",
+    "文章数量"
+  )
+)
+
+kable(var_desc) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, monospace = TRUE) %>%
+  column_spec(2)
+```
+
+### inla实现
+下面的通过family = "zeroinflatedpoisson1"指定零膨胀的泊松模型，还可以通过family = "zeroinflatedbinomial1"指定零膨胀的负二项模型。
+```{r}
+formula <- art ~ fem + mar + kid5 + phd + ment
+articles_inla <- inla(formula, data=articles, family = "zeroinflatedpoisson1", control.compute = list(dic = TRUE, cpo = TRUE))
+summary(articles_inla)
+# plot(articles_inla)
+```
+
+有5岁以下孩子(kid5=1)的人比无孩子(kid5=0)的人预期对数计数减少0.171。导师发表论文数量每增加一个单位，预期对数计数增加0.021。其余变量不显著。
+
+### brms实现
+使用brms包的bf()函数创建了一个零膨胀泊松回归模型的完整规范，包含两个组成部分：
+计数模型部分: art ~ fem + mar + kid5 + phd + ment
+零膨胀模型部分: zi ~ fem + mar + kid5 + phd + ment 其中zi特殊标记，表示"零膨胀"组件。
+```{r}
+#| echo: true
+#| eval: false
+
+formula <- bf(art ~ fem + mar + kid5 + phd + ment,
+                  zi ~ fem + mar + kid5 + phd + ment)
+
+# 或者使用截距作为零通胀部分唯一预测器（如果需要更接近INLA的简单结构）
+# formula <- bf(art ~ fem + mar + kid5 + phd + ment, 
+#                   zi ~ 1)
+
+articles_brms <- brm(
+  formula = formula,
+  data = articles,
+  family = zero_inflated_poisson(), # 零膨胀泊松分布
+  chains = 4,                       # MCMC链数
+  iter = 4000,                      # 迭代次数
+  warmup = 1000,                    # 预热迭代数
+  control = list(adapt_delta = 0.9) # 增加适应性步长以减少分歧
+)
+summary(articles_brms)
+```
+
+brms拟合结果类似与INLA。

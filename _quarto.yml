@@ -11,9 +11,22 @@ book:
   output-file: "_main"
   chapters:
     - index.qmd
-    - part: data-preperation.qmd
+    - part: 基础模型.qmd
       chapters:
-        - intro.qmd
+        - charpter01-线性模型.qmd
+        - charpter02-广义线性模型.qmd
+        - charpter03-线性混合模型.qmd
+        - charpter04-广义线性混合模型.qmd
+        - charpter05-可加与广义可加模型.qmd
+        - charpter06-生存模型.qmd
+        - charpter07-随机游走模型.qmd
+        - charpter08-层次模型.qmd
+    - part: 时空分析.qmd
+      chapters:
+        - charter09-空间模型.qmd
+        - charter10-时间模型.qmd
+        - charter11-共同区域模型.qmd
+        - charter12-时空模型.qmd
     - references.qmd
   appendices:
     - appendix-a.qmd
