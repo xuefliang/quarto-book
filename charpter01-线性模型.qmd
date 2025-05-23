@@ -1,17 +1,7 @@
 # 线性回归
 ```{r}
 #| warning: false
-library(tidyverse)
-library(brms)
-library(INLA)
-library(inlabru)
-# remotes::install_github("julianfaraway/brinla")
-library(brinla)
-library(bayesplot)
-library(INLAspacetime)
-library(haven)
-library(knitr)
-library(kableExtra)
+source('scripts/utils.R')
 ```
 
 贝叶斯线性模型是将贝叶斯推断方法应用于线性回归问题的统计模型框架。不同于传统的频率派方法，贝叶斯方法将参数视为随机变量，并通过概率分布表示对参数的不确定性。
@@ -89,10 +79,7 @@ var_desc <- data.frame(
   )
 )
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 # brms实现

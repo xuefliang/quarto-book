@@ -2,18 +2,7 @@
 
 ```{r}
 #| warning: false
-library(tidyverse)
-library(brms)
-library(INLA)
-library(inlabru)
-# remotes::install_github("julianfaraway/brinla")
-library(brinla)
-library(bayesplot)
-library(INLAspacetime)
-library(haven)
-# library(betareg)
-library(knitr)
-library(kableExtra)
+source('scripts/utils.R')
 ```
 
 ## 二元响应变量
@@ -42,10 +31,7 @@ var_desc <- data.frame(
   )
 )
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 ### inla实现
@@ -94,10 +80,7 @@ var_desc <- data.frame(
   )
 )
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 ### inla实现
@@ -143,10 +126,7 @@ var_desc <- data.frame(
 #查看观察到的比率
 # smoke %>% mutate(rate = round(case/person_yrs, 4))
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 ### inla实现
@@ -190,10 +170,7 @@ var_desc <- data.frame(
   )
 )
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 ### inla实现
@@ -240,10 +217,7 @@ var_desc <- data.frame(
   )
 )
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 ### inla实现

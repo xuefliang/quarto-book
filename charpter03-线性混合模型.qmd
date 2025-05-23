@@ -1,5 +1,10 @@
 # 线性混合模型 
 
+```{r}
+#| warning: false
+source('scripts/utils.R')
+```
+
 ## 数据
 penicillin数据集来源于青霉素的产生，有3个变量。
 ```{r}
@@ -17,10 +22,7 @@ var_desc <- data.frame(
 # 将生产类型的参考水平设置为 D 
 penicillin$treat <- relevel(penicillin$treat, "D")
 
-kable(var_desc) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
-  column_spec(1, bold = TRUE, monospace = TRUE) %>%
-  column_spec(2)
+format_kable_table(var_desc)
 ```
 
 ## inla实现
@@ -40,7 +42,6 @@ INLA的先验设置为精度(precision)，而brms设置为标准差(sd)或方差
 ```{R}
 #| echo: true
 #| eval: false
-
 
 prior_specs <- c(
   # 对随机效应方差的先验
@@ -67,3 +68,158 @@ summary(penicillin_brms)
 ```
 
 brms拟合结果类似与INLA。
+
+# 广义线性混合模型
+
+## 二元响应变量
+
+### 数据
+ohio数据集来源于`brinla`包，是俄亥俄州有4个名儿童的哮喘数据，每名儿童有4行记录，分别表示7岁、8岁、9岁和10岁时的情况。
+```{r}
+data(ohio,package = 'brinla')
+
+var_desc <- data.frame(
+  变量名 = names(ohio),
+  描述 = c(
+    "是否有哮喘",
+    "编号",
+    "年龄"
+    "母亲是否吸烟"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+id 是标识变量，model="iid" 指定了这是一个独立同分布(Independent and Identically Distributed)的随机效应。
+```{r}
+formula <- resp ~ age + smoke + f(id, model="iid")
+ohio_inla <- inla(formula, family="binomial", data=ohio, control.predictor = list(compute = TRUE))
+summary(ohio_inla)
+```
+
+固定效应分析:年龄每增加1单位，对数几率平均减少0.173，年龄对响应变量有显著的负面影响。吸烟的95%可信区间: [-0.083, 0.858]包含0，不够显著。随机效应分析:个体间(id)的差异相当显著，表明存在未被固定效应捕获的异质性。
+
+由于参数以logit为尺度，需要借助变换帮助解释，以ilogit变换后仍然难以解释。
+```{r}
+ilogit <- function(x) exp(x)/(1 + exp(x))
+ilogit(ohio_inla$summary.fixed[1,c(3,4,5)])
+```
+
+通过指数解释回归参数，年龄增加1岁，哮喘概率增加0.85倍（即减少0.15）。
+```{r}
+exp(ohio_inla$summary.fixed[-1, c(3,4,5)])
+```
+
+### brms实现
+在brms中，随机截距使用(1|id)的语法表示
+```{r}
+#| echo: true
+#| eval: false
+
+formula<- resp ~ age + smoke + (1|id)
+
+ohio_brms <- brm(
+  formula = formula, 
+  data = ohio, 
+  family = bernoulli(),
+  warmup = 1000,
+  iter = 3000,
+  chains = 4,
+  cores = 4,  # 并行运行链，加快计算
+  seed = 123  # 设置随机种子以确保结果可重复
+)
+summary(ohio_brms)
+```
+
+
+## 连续响应变量
+### 数据
+数据来自lme4包，sleepstudy记录了睡眠剥夺研究中受试者每日平均反应时间的数据集，在第 0 天，受试者有正常的睡眠量。此后每晚被限制睡眠3小时。响应变量Reaction表示一系列测试中每天每个受试者平均反应时间（毫秒）。
+```{r}
+data(sleepstudy,package = "lme4")
+
+var_desc <- data.frame(
+  变量名 = names(sleepstudy),
+  描述 = c(
+    "平均反应时间",
+    "睡眠剥夺的天数",
+    "观测的受试者编号"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+
+### inla实现
+需要分别指定随机截距和随机斜率,使用group参数明确指定随机效应之间的相关性，使用control.group=list(model="exchangeable")设置交换相关结构。创建了特定的索引变量idx.intercept和idx.slope，该方法可能提供更多的灵活性来指定不同的相关结构。
+```{r}
+sleepstudy |> 
+  mutate(Subject=as.numeric(Subject)) -> sleepstudy
+n <- nrow(sleepstudy)
+sleepstudy$idx.intercept <- sleepstudy$Subject  # 随机截距的索引
+sleepstudy$idx.slope <- sleepstudy$Subject      # 随机斜率的索引
+
+formula <- Reaction ~ Days + 
+                f(idx.intercept, model="iid", group=idx.slope, control.group=list(model="exchangeable")) + 
+                f(idx.slope, Days, model="iid")
+
+# control.compute参数用于计算模型诊断信息
+sleep_inla <- inla(formula, 
+                  family="gaussian", 
+                  data=sleepstudy,
+                  control.compute=list(dic=TRUE, waic=TRUE))
+summary(sleep_inla)
+```
+
+使用copy="Subject"参数告诉INLA使用与随机截距相同的随机效应结构，两种方法应该产生等价的结果，这种方法简化了语法。
+```{r}
+#| echo: true
+#| eval: false
+
+# 创建额外的ID变量用于随机斜率
+sleepstudy |> mutate(Subject=as.numeric(Subject),SubjectID = Subject)->sleepstudy
+
+# 使用copy功能
+formula <- Reaction ~ Days + 
+                f(Subject, model="iid") +                # 随机截距
+                f(SubjectID, Days, model="iid", copy="Subject")  # 随机斜率
+
+# 拟合模型
+sleep_inla2 <- inla(formula, 
+                   family="gaussian", 
+                   data=sleepstudy,
+                   control.compute=list(dic=TRUE, waic=TRUE))
+summary(sleep_inla2)
+```
+
+固定效应：Days每增加一天睡眠剥夺，反应时间平均增加10.435ms (95%可信区间：[6.972, 13.896])。随机截距精度: 7.915 (对应标准差约为0.356)，表示受试者基准反应时间的变异性。随机斜率精度: 0.020 (对应标准差约为7.07)，表示受试者对睡眠剥夺反应程度的变异性。GroupRho: -0.058，表示随机截距和随机斜率之间的相关性为负相关。
+
+### brms实现
+```{r}
+#| echo: true
+#| eval: false
+
+data(sleepstudy,package = "lme4")
+formula = Reaction ~ Days + (Days | Subject)
+sleep_brms <- brm(
+  formula,
+  data = sleepstudy,
+  family = gaussian(),
+  chains = 4,       # MCMC链数量
+  iter = 2000,      # 每条链的迭代次数
+  warmup = 1000,    # 预热迭代次数
+  thin = 1,         # 稀疏参数
+  cores = 4,        # 并行计算使用的核心数
+  control = list(adapt_delta = 0.95)  # 提高HMC采样的稳定性
+)
+summary(sleep_brms)
+
+# 进行后验预测检查
+pp_check(brm_model)
+```
+
+brms估计的随机效应和inla在本例中有所不同，截距的标准差为26.77，表明受试者基线反应时间存在较大差异
+斜率的标准差为6.54，表明受试者对睡眠剥夺的敏感度也存在较大差异。截距-斜率相关性：相关系数为0.10但不显著，表明受试者的基线反应时间与其对睡眠剥夺的敏感度之间没有明确关系。
