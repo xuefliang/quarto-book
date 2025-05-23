@@ -83,7 +83,7 @@ var_desc <- data.frame(
   描述 = c(
     "是否有哮喘",
     "编号",
-    "年龄"
+    "年龄",
     "母亲是否吸烟"
   )
 )
@@ -151,7 +151,6 @@ var_desc <- data.frame(
 
 format_kable_table(var_desc)
 ```
-
 
 ### inla实现
 需要分别指定随机截距和随机斜率,使用group参数明确指定随机效应之间的相关性，使用control.group=list(model="exchangeable")设置交换相关结构。创建了特定的索引变量idx.intercept和idx.slope，该方法可能提供更多的灵活性来指定不同的相关结构。

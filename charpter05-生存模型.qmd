@@ -1,5 +1,4 @@
 # 生存模型 
-
 ```{r}
 #| warning: false
 source('scripts/utils.R')
@@ -296,13 +295,16 @@ var_desc <- data.frame(
   描述 = c(
     "病例编号",
     "死亡或终止时长",
-    "死亡情况，数值向量，其中 0 表示截尾，1 表示死亡。",
+    "死亡情况 数值向量 其中 0 表示截尾1 表示死亡",
     "CD4 细胞计数",
     "记录CD4细胞计数的时间点",
     "分组，ddC 表示扎西替韦，ddI 表示依非韦伦",
     "性别",
-    "因子变量，AIDS表示研究开始时的先前机会性感染AIDS，noAIDS表示先前未感染。"
-    "水平分为 intolerance 和 failure，分别表示 AZT 不耐受和 AZT 失败"，
+    "因子变量AIDS表示研究开始时的先前机会性感染AIDS，noAIDS表示先前未感染",
+    "水平分为 intolerance 和 failure，分别表示 AZT 不耐受和 AZT 失败",
+    "开始",
+    "停止",
+    "事件"
   )
 )
 

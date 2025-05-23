@@ -18,8 +18,8 @@ book:
         - charpter03-线性混合模型.qmd
         - charpter04-可加与广义可加模型.qmd
         - charpter05-生存模型.qmd
-        - charpter06-随机游走模型.qmd
-        - charpter07-层次模型.qmd
+        - charpter06-混合模型.qmd
+        - charpter07-层级模型.qmd
     - part: 时空分析.qmd
       chapters:
         - charpter08-空间模型.qmd

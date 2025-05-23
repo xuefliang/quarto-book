@@ -1,0 +1,251 @@
+# 层次模型 
+```{r}
+#| warning: false
+source('scripts/utils.R')
+```
+
+层级模型（Hierarchical Models）和多层模型（Multilevel Models）本质上没有区别。层级模型描述了，具有层次化结构的数据，参数的影响一层层传递下来最后影响到观测。比如在学生的学习成绩中，学生在某一年的 考试成绩是从不同的学校收集的。假设研究人员有兴趣了解考试分数与复习时间之间的关系。由于不同的学校参与了这项研究，学生的分数可能因学校而异，因此研究人员有必要了解每所学校的平均分数并比较学生在学校之间的平均表现。
+
+## 比例的层次模型
+
+### 数据
+DeathHeartAttackManhattan数据集是纽约市13家医院的心脏病病例数和死亡人数。
+```{r}
+data(DeathHeartAttackManhattan,package = 'ProbBayes')
+
+var_desc <- data.frame(
+  变量名 = names(DeathHeartAttackManhattan),
+  描述 = c(
+    "医院名称",
+    "类型",
+    "病例数",
+    "死亡数"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+###
+响应变量为死亡数，试验数为Cases，假设每家医院的死亡率围绕全局平均值随机变化，Hospital作为随机效应。该模型是一个二级结构，观察嵌套在医院中。
+```{r}
+formula <- Deaths ~ 1 + f(Hospital, model = "iid")
+# 拟合INLA模型
+dham_inla <- inla(
+  formula = formula,
+  family = "binomial",
+  data = DeathHeartAttackManhattan,
+  Ntrials = Cases,
+  control.predictor = list(compute = TRUE),
+  control.compute = list(return.marginals = TRUE, dic = TRUE, waic = TRUE)
+)
+summary(dham_inla)
+```
+
+随机效应的精度：19990.23 (精度=方差的倒数)非常高,表明医院间死亡率变异性极低。有效参数数量：1.01，接近1表明几乎没有医院随机效应，模型等同于仅有截距的简单模型，几乎所有医院的心脏病死亡率都接近6.87%。
+
+### brms
+
+使用PC先验约束了组间方差的估计，使模型在数据有限情况下更为稳健。
+```{r}
+#| echo: true
+#| eval: false
+
+dham_brms <- brm(
+  data = DeathHeartAttackManhattan, 
+  family = binomial,
+  Deaths | trials(Cases) ~ 1 + (1 | Hospital),
+  # 使用PC先验
+  prior = c(
+    # PC先验语法：student_t(df, 0, scale) 其中scale是u参数
+    prior(student_t(3, 0, 0.3), class = "sd", group = "Hospital"),
+    prior(normal(0, 10), class = "Intercept")
+  ),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  seed = 123,
+  refresh = 0
+)
+summary(dham_brms)
+
+posterior_df <- as_draws_df(dham_brms)
+# 创建一个包含所有后验样本的长格式数据框
+post <- posterior_df %>%
+  as_tibble() %>%
+  select(starts_with("r_Hospital"), .chain, .iteration, .draw) %>%
+  pivot_longer(cols = starts_with("r_Hospital"),
+               names_to = "Hospital",
+               values_to = "Effect")
+```
+
+BRMS模型的结果和INLA类似，虽然存在医院间差异，但不是非常显著(sd=0.16)。
+
+## 均值的层次模型
+
+### 数据
+
+```{r}
+data(jsp, package = "faraway")
+
+mjspr  <- jsp %>% 
+  filter(year == 2) %>%
+  select(school, class, id, gender, raven, social, english, math) %>%
+  # 将english和math转为长格式
+  pivot_longer(
+    cols = c(english, math),
+    names_to = "subject",
+    values_to = "raw_score"
+  ) %>%
+  # 根据科目调整原始分数
+  mutate(
+    # 英语除以100，数学除以40
+    score = case_when(
+      subject == "english" ~ raw_score / 100,
+      subject == "math" ~ raw_score / 40
+    ),
+    # 中心化raven变量
+    craven = raven - mean(raven)
+  ) %>%
+  # 不再需要的原始分数列
+  select(-raw_score) %>%
+  mutate(
+    school = factor(school),  # 将学校转换为因子变量
+    classch = factor(paste(school, class, sep = "_")),  # 创建学校_班级的组合因子
+    classchid = factor(paste(school, class, id, sep = "_"))  # 创建学校_班级_ID的组合因子
+  )
+
+var_desc <- data.frame(
+  变量名 = names(mjspr),
+  描述 = c(
+    "学校",
+    "班级",
+    "个体编号",
+    "性别",
+    "认知能力测试得分",
+    "社交能力测试得分",
+    "科目",
+    "分数",
+    "认知能力测试得分中心化",
+    "学校班级的组合ID",
+    "学校班级个体的组合ID"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+模型包含三个层级的嵌套结构（学校、班级、学生），用于分析不同层级因素对学生成绩的影响固定效应：subject*gender: 科目与性别的交互效应，包含主效应（subject、gender）和它们的交互效应
+craven*subject。认知能力与科目的交互效应，也包含各自的主效应。social: 社交因素的主效应。f(school, model = "iid"): 将学校作为独立同分布(iid)随机效应。f(classch, model = "iid"): 将学校-班级组合作为iid随机效应。f(classchid, model = "iid"): 将学校-班级-学号组合作为iid随机效应
+```{r}
+formula <- score ~ subject * gender + craven * subject + social +
+    f(school, model = "iid") +
+    f(classch, model = "iid") +
+    f(classchid, model = "iid")
+mjspr_inla <- inla(formula, family = "gaussian", data = mjspr)
+summary(mjspr_inla)
+```
+
+#### brms实现
+随机效应:(1|school): 学校层级的随机截距，表示不同学校间的变异。(1|school:class): 学校内班级的随机截距，表示嵌套在学校内的班级间变异。(1|school:class:id): 个体学生层级的随机截距，表示嵌套在班级内的学生个体间变异。
+```{r}
+#| echo: true
+#| eval: false
+
+formula <- score ~ subject * gender + craven * subject + social +
+    (1 | school) +
+    (1 | school:class) +
+    (1 | school:class:id)
+mjspr_brms <- brm(formula, data = mjspr, iter = 10000, silent = 2, cores = 4)
+summary(mjspr_brms)
+```
+
+brms的结果和INLA类似。
+
+## 纵向数据
+
+数据来自lme4包，sleepstudy记录了睡眠剥夺研究中受试者每日平均反应时间的数据集，在第 0 天，受试者有正常的睡眠量。此后每晚被限制睡眠3小时。响应变量Reaction表示一系列测试中每天每个受试者平均反应时间（毫秒）。
+
+### 数据
+```{r}
+data(sleepstudy,package = "lme4")
+
+#反应时间通过除以1000，使得INLA估计稳定
+sleepstudy |> 
+  mutate(Reaction=Reaction/1000) -> sleepstudy
+
+var_desc <- data.frame(
+  变量名 = names(sleepstudy),
+  描述 = c(
+    "平均反应时间",
+    "睡眠剥夺的天数",
+    "观测的受试者编号"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### INLA实现
+为每个受试者添加随机截距，假设这些随机效应相互独立且同分布(iid)，每个受试者的截距不是独立估计的，而是"借力"于群体分布。
+```{r}
+sleeps_inla <- inla(Reaction ~ 1+ Days+f(Subject,model='iid'),data = sleepstudy)
+summary(sleeps_inla)
+```
+
+Days效应: 平均值为0.010，表示随着每增加一天的睡眠剥夺，反应时间平均增加0.010个单位，95%CI为[0.009, 0.012]。可信区间不包含0，说明睡眠剥夺确实导致反应时间延长。观测精度高，表示模型残差的变异程度很小。受试者精度高，表示不同受试者间基线反应时间的变异程度不大。受试者精度的可信区间较宽，反映了对该参数估计的不确定性较大。
+
+每个受试者添加随机截距和随机斜率，增加了每个受试者自己特定的对时间的反应模式。不仅截距，斜率也来自群体分布，且允许截距与斜率之间的相关性。
+```{r}
+sleeps_inla2 <- inla(Reaction ~ 1+ Days+f(Subject,Days,model='iid'),data = sleepstudy)
+summary(sleeps_inla2)
+```
+
+固定效应的Days效应与上个模型类似，受试者精度比上个模型大幅增加。受试者之间存在明显差异，不仅基线水平不同，对睡眠剥夺的敏感度也不同。
+
+### BRMS实现
+拟合随机截距模型
+```{r}
+#| echo: true
+#| eval: false
+
+priors <- c(
+  prior(normal(250, 100), class = "Intercept"),
+  prior(normal(10, 10), class = "b", coef = "Days"),
+  prior(cauchy(0, 25), class = "sd"),
+  prior(cauchy(0, 25), class = "sigma")
+)
+
+sleep_brms <- brm(
+  formula = Reaction ~ 1 + Days + (1 | Subject),
+  data = sleepstudy,
+  family = gaussian(),
+  prior = priors,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 123,
+  control = list(adapt_delta = 0.95)
+)
+summary(sleep_brms)
+```
+
+拟合随机截距和随机斜率模型
+```{r}
+#| echo: true
+#| eval: false
+
+sleep_brms2 <- brm(
+  formula = Reaction ~ 1 + Days + (1 + Days | Subject),
+  data = sleepstudy,
+  family = gaussian(),
+  prior = priors,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 123,
+  control = list(adapt_delta = 0.95)
+)
+summary(sleep_brms2)
+```
