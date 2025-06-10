@@ -1,3 +1,472 @@
-# 空间模型 
+# 空间数据
 
-## inla实现
+```{r}
+#| warning: false
+source('scripts/utils.R')
+```
+
+空间数据与传统的表格数据相比，具有独特的特征和复杂性。理解这些特殊之处对于正确处理和分析空间数据至关重要。
+
+## 空间数据的特殊性质
+
+**位置**是空间数据的核心特征，可以通过绝对位置（GPS坐标）或相对位置（与其他对象的关系）来表达。**坐标**作为量化空间位置的数学工具，可以是2D、3D或更高维度，单位的选择会影响距离计算和空间分析结果。**时间**维度为空间数据增加了动态性，包括显式和隐式时间参考。**属性**是在特定位置观测或测量的现象特征，包括可量化的测量属性和分类的观察属性。
+
+**时空交互**是空间分析的核心，涉及空间变异性、时间变异性和时空耦合现象。**参考系统**确保数据的一致性，包括空间参考系统（地理坐标系、投影坐标系）、时间参考系统和属性参考系统。
+
+**支持**概念描述了属性值与空间几何对象的关系。点支持意味着属性值在整个几何对象内恒定，如行政区名称；面/线/体支持则表示属性值是几何对象内所有点值的汇总，如区域平均温度。
+
+在空间连续性方面，连续数据如温度场在空间上形成连续的表面，而非连续数据如商店分布只在特定点位置存在。属性连续性基于Stevens的测量尺度分类，包括连续属性（区间尺度和比率尺度）和离散属性（名义尺度和序数尺度）。
+
+## 统计推断框架
+
+### 基于设计的统计
+
+在基于设计的统计框架中，随机性来源于抽样过程。考虑研究区域$B$中的观测值$z(s), s \in B$，如果随机选择样本位置，则位置$S$是随机变量。两个变量$z(S_1)$和$z(S_2)$在独立采样条件下是独立的。
+
+当包含概率恒定时（完全空间随机性），可使用样本均值：
+$$\hat{\mu} = \frac{1}{n}\sum_{j=1}^n z(s_j)$$
+
+基于设计的方法适用于估计区域内的均值，但无法预测特定位置的值。
+
+### 基于模型的统计
+
+基于模型的统计假设观测值本身具有随机性，基本模型为：
+$$Z(s) = X(s)\beta + e(s)$$
+
+可进一步分解为：
+$$Z(s) = X(s)\beta + w(s) + \epsilon$$
+
+其中$w(s)$是空间相关的信号，$\epsilon$是独立噪声。预测过程包括参数估计和空间预测两个步骤，这是地统计学的核心思想。
+
+## 空间数据类型
+
+### 区域数据
+
+区域数据处理空间分区的汇总信息，重点关注区域间的空间关系和相互影响。
+
+**基本特征**：
+- 数据结构：多边形（或格网单元）+ 区域汇总值
+- 支持类型：通常是面支持（区域汇总统计）
+- 邻接关系：相邻区域通常表现出空间相关性
+- 分析重点：区域间的空间依赖和溢出效应
+
+**空间相关性**通过正相关（邻近区域值相似）或负相关（邻近区域值不同）表现，常用Moran's I、Geary's C等指标测量。
+
+**分析模型**包括：
+- 空间滞后模型（SAR）：$y = \rho Wy + X\beta + \varepsilon$
+- 空间误差模型（SEM）：$y = X\beta + u, u = \lambda Wu + \varepsilon$
+- 条件自回归模型（CAR）：基于条件分布的空间建模
+- 高斯马尔可夫随机场（GMRF）：基于图结构的空间建模
+
+**权重矩阵**定义空间邻接关系，包括基于共同边界的邻接矩阵、基于距离阈值的距离矩阵和基于最近邻居数量的k-近邻矩阵。
+
+**典型应用**：区域经济学的经济增长空间溢出、人口统计的社会经济指标空间分布、公共卫生的疾病发病率区域差异、政治地理的选举结果分析、城市规划的土地利用规划等。
+
+#### 苏格兰唇癌风险
+数据包含苏格兰各郡 1975 年至 1980 年间观察到和预期的唇癌病例数，以及一个表示从事农业、渔业或林业人口比例的变量（AFF）。AFF 变量与阳光曝露有关，这是唇癌的风险因素。数据中还包含苏格兰各郡的地图。
+```{r}
+data(scotland_sf,package = 'SpatialEpi')
+
+var_desc <- data.frame(
+  变量名 = names(scotland_sf),
+  描述 = c(
+    "每个县名称",
+    "每个县观察到的唇癌病例数",
+    "每个县预期的唇癌病例数",
+    "每个县从事农业、渔业或林业人口的比例",
+    "几何列"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+
+```{r}
+scotland_sf <- scotland_sf %>%
+  mutate(
+    x = st_coordinates(st_centroid(.))[,1],
+    y = st_coordinates(st_centroid(.))[,2]
+  ) %>%
+  filter(!is.na(cases), !is.na(AFF), !is.na(expected))
+
+coords <- st_coordinates(scotland_sf)
+initial_range <- diff(range(coords[, "X"])) / 3
+max_edge <- initial_range / 2
+
+mesh <- fm_mesh_2d_inla(scotland_sf,
+  max.edge=c(1, 2)* max_edge,
+  offset = c(initial_range, initial_range), 
+  cutoff=max_edge/7)
+plot(mesh)
+
+# 设置空间场的先验分布
+pc_prior_range <- c(0.5, 0.01) # P(range < 0.5) = 0.01
+pc_prior_sigma <- c(1, 0.01) # P(sigma > 1) = 0.01
+
+# 定义SPDE模型
+spde <- inla.spde2.pcmatern(
+  mesh,
+  prior.range = pc_prior_range,
+  prior.sigma = pc_prior_sigma
+)
+
+components <- cases ~ 
+  Intercept(1) + AFF + 
+  field(cbind(x, y), model = spde)
+
+scotland_inla <- bru(
+  components,
+  data = scotland_sf,
+  family = 'poisson',
+  E = scotland_sf$expected,
+  options = list(
+    control.inla = list(int.strategy = 'eb',reordering = "metis")
+  )
+)
+
+summary(scotland_inla)
+```
+
+截距: 均值为0.28，95%置信区间为(-0.184, 0.745)。AFF系数: 平均为3.13，95%置信区间为(0.607, 5.653)不包括0,这表明AFF与病例数呈显著正相关，exp(3.13) ≈ 22.8，意味着AFF每增加1个单位，期望病例数增加约22.8倍。空间随机效应：Range空间相关性的范围约93公里，表示这个距离内的地区在空间上相关。
+
+每个县的唇癌相对风险及其不确定性由后验均值和包含在对象 scotland_inla$summary.fitted.values 中的 95%置信区间给出。第 mean 列是后验均值， 0.025quant 和 0.975quant 分别是 2.5 和 97.5 百分位数，分别。
+```{r}
+predictions <- predict(scotland_inla, scotland_sf, ~ exp(Intercept + AFF + field))
+scotland_sf <- scotland_sf %>%
+  mutate(
+    RR = predictions$mean,
+    LL = predictions$q0.025,
+    UL = predictions$q0.975
+  )
+```
+
+### 点模式数据  (Point Pattern Data)
+
+点模式数据关注事件发生的位置，位置本身包含重要信息。点的位置本身是随机变量，是我们要研究的对象。关注点的空间分布模式，点出现的位置具有随机性和不确定性。
+
+**基本特征**：
+- 核心要素：点位置 + 观测窗口
+- 关键特点：位置包含信息，观测窗口除点之外是"空的"
+- 数据结构：$(s_1, s_2, ..., s_n)$，其中$s_i$是事件位置
+
+**分析内容**包括强度分析（事件发生的密度和分布）、模式识别（聚集、随机、规则分布）和交互作用（不同类型事件间的相互影响）。
+
+**标记点模式**中，点可能具有额外属性信息，包括离散标记（如树种类型）和连续标记（如树木胸径）。
+
+**典型应用**：生态学的动植物分布研究、犯罪学的犯罪事件时空分布、流行病学的疾病病例空间聚集、商业分析的设施布局分析、地质学的矿物分布和地震震中分析等。
+
+#### 数据
+数据集 chorley 提供了 1974 年至 1983 年间在英格兰兰开夏郡的卫生局记录的喉癌（58 例）和肺癌（978 例）新病例的确切居住地址。补充数据给出了一个废弃工业焚化炉的位置。数据以带标记的点模式表示，其中点表示每个个体的家庭地址的地理位置，标记则标识每个点是喉癌还是肺癌的病例。
+```{r}
+data(chorley,package = 'spatstat.data')
+
+# 将spatstat点模式对象转换为sf数据框
+chorley_sf <- tibble(
+  x = chorley$x,
+  y = chorley$y,
+  type = factor(chorley$marks)  
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = NA)  
+
+var_desc <- data.frame(
+  变量名 = names(chorley_sf),
+  描述 = c(
+    "类型",
+    "位置"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+需要告诉'lgcp'这是一个因子固定效应，通过`model="factor_full"`来实现，为每个因子水平提供一个系数。使用因子时，我们需要小心过度参数化问题。与'lm()'、'glm()'或'gam()'等回归模型不同，'lgcp()'和`inlabru`不会自动移除第一个水平并将其纳入截距。相反，可以使用没有截距的`model="factor_full"`，或者使用`model="factor_contrast"`，这确实会移除第一个水平。
+```{r}
+boundary <- chorley_sf %>%
+  st_union() %>%      
+  st_convex_hull()  
+
+coords <- st_coordinates(chorley_sf)
+x_range <- diff(range(coords[, "X"]))
+y_range <- diff(range(coords[, "Y"]))
+max_range <- max(x_range, y_range)
+max_edge <- max_range / 20 
+offset <- max_range / 10     
+mesh <- inla.mesh.2d(
+  loc = coords,
+  max.edge = c(max_edge, max_edge * 2),
+  offset = c(offset, offset * 2),
+  cutoff = max_edge / 2
+)
+plot(mesh)
+mesh$n
+points(coords, col = as.numeric(chorley_sf$type) + 1, pch = 16)
+
+matern <- inla.spde2.pcmatern(
+  mesh,
+  prior.sigma = c(2, 0.05),
+  prior.range = c(2.5, 0.05)
+)
+
+# 点过程模型组件
+cmp_base <- geometry ~ Intercept(1) + type(chorley_sf$type, model = "factor_full") + spatial(geometry, model = matern)
+
+# 拟合LGCP模型
+fit_base <- lgcp(
+  cmp_base,
+  data = chorley_sf,
+  samplers = boundary,
+  domain = list(geometry = mesh),
+  options = list(
+    control.inla = list(
+      strategy = "gaussian",
+      int.strategy = "ccd"
+    )
+  )
+)
+
+summary(fit_base)
+
+# 获取type效应的后验样本
+type_effects <- fit_base$summary.random$type
+print(type_effects)
+```
+
+空间相关范围约7.6个距离单位，事件在空间上呈现聚集模式。type两个效应的置信区间重叠，表明差异可能不显著。研究焚化炉和喉癌与肺癌位置之间的关系，可采用如下方式进行。
+
+```{r}
+chorley_sf <- tibble(
+  x = chorley$x,
+  y = chorley$y,
+  type = factor(chorley$marks)
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = NA)
+
+incinerator_sf <- tibble(
+  x = 354.5,
+  y = 413.6
+) %>%
+  slice(rep(1, 58)) %>%  
+  st_as_sf(coords = c("x", "y"), crs = NA)
+
+larynx_sf <- chorley_sf |> 
+  filter(type == "larynx") |> 
+  mutate(dist = st_distance(geometry, incinerator_sf, by_element = TRUE) %>%
+           as.numeric()) |> 
+  mutate(log_dist = log(dist + 0.001))
+
+ggplot() +
+  geom_sf(data = larynx_sf, size = 2) +
+  geom_sf(data = incinerator_sf, color = "red", size = 2, shape = 17) +
+  theme_minimal() +
+  labs(title = "Larynx Cancer Cases and Incinerator Location")
+
+mesh <- inla.mesh.2d(
+  loc = st_coordinates(larynx_sf),
+  max.edge = c(1, 3),  
+  offset = c(1, 3),
+  cutoff = 0.8  
+)
+plot(mesh)
+
+boundary <- larynx_sf %>%
+  st_union() %>%      
+  st_convex_hull()  
+
+spde <- inla.spde2.pcmatern(
+  mesh,
+  prior.sigma = c(2, 0.05),
+  prior.range = c(2.5, 0.05)
+)
+
+# 定义模型组件
+components <- geometry ~ 
+  Intercept(1) + dist(dist, model = "rw2")
+
+
+# 拟合LGCP模型
+lgcp_fit <- lgcp(
+  components = components,
+  data = larynx_sf,
+  samplers = boundary, 
+  domain = list(geometry = mesh)
+)
+
+# 模型摘要
+summary(lgcp_fit)
+
+brinla::bri.hyperpar.summary(lgcp_fit)
+```
+
+
+### 地理统计数据/点参考数据  (Point Referenced Data / Geostatistical Data)
+
+地统计数据的特点是在有限样本位置观测连续变化现象，目标是预测未观测位置的值。点的位置是预先确定的（采样点、监测站等）,研究焦点: 关注点上测量值的空间变化,每个点都有一个或多个测量值。
+
+**基本特征**：
+- 观测特点：感兴趣变量在样本位置被测量
+- 缺失性质：其他位置变量值存在但未观测
+- 分析目标：估计未观测位置的值（空间插值）
+- 信息焦点：主要关注测量值而非采样位置
+
+**基本假设**包括空间连续性（变量在空间上连续分布）、空间相关性（邻近位置值相互关联）和平稳性（空间统计特征在区域内相对稳定）。
+
+**分析方法**包括变异函数建模（描述空间相关结构）、Kriging插值（最优线性无偏预测）、协Kriging（利用辅助变量提高预测精度）和贝叶斯方法（结合先验信息的空间预测）。
+
+**典型应用**：环境监测的空气质量和土壤污染分布、气象学的温度和降雨空间分布、地质勘探的矿物品位分析、农业的土壤肥力评估、水文学的地下水位和水质参数分析等。
+
+#### 数据
+数据集 rongelap 记录了 157 个测量点的伽马射线强度，即在时间间隔 time （秒）内放射的粒子数目 counts（个），测量点的横纵坐标分别为 cX （米）和 cY（米）。
+```{r}
+rongelap <- readRDS(file = "data/rongelap.rds") |> 
+  st_as_sf(coords=c('cX','cY'), dim = "XY")
+rongelap_coastline <- readRDS(file = "data/rongelap_coastline.rds") |> 
+  st_as_sf(coords=c('cX','cY'), dim = "XY")
+
+
+ggplot() +
+  geom_sf(data=rongelap,aes(color = counts / time), size = 0.5) +
+  geom_sf(data = rongelap_coastline) +
+  theme_bw() +
+  scale_x_continuous(n.breaks = 7) +
+  scale_color_viridis_c(option = "C") +
+  coord_sf() + 
+  labs(
+    x = "横坐标（米）", 
+    y = "纵坐标（米）",
+    color = "辐射强度"
+  )
+```
+
+空间广义线性混合效应模型
+```{r}
+boundary <- rongelap %>%
+  st_union() %>%      
+  st_convex_hull()  
+
+coords <- st_coordinates(boundary)[, 1:2]
+x_range <- diff(range(coords[, "X"]))
+y_range <- diff(range(coords[, "Y"]))
+max_range <- max(x_range, y_range)
+max_edge <- max_range / 20 
+offset <- max_range / 10     
+mesh <- inla.mesh.2d(
+  loc = coords,
+  max.edge = c(max_edge, max_edge * 2),
+  offset = c(offset, offset * 2),
+  cutoff = max_edge / 2
+)
+plot(mesh)
+mesh$n
+
+spde <- inla.spde2.pcmatern(
+  mesh,
+  prior.sigma = c(1, 0.01),    # P(sigma > 1) = 0.01
+  prior.range = c(max_range/5, 0.05),  # P(range < max_range/5) = 0.05
+  alpha = 3/2  # alpha = nu + d/2，对于 nu=0.5, d=2，所以 alpha=1.5
+)
+
+# 定义模型组件
+cmp <- counts ~ 
+  Intercept(1) +
+  spatial(geometry, model = spde) + 
+  offset_term(log(time))
+
+# # 检查数据分布（均值和方差）
+mean_counts <- mean(rongelap$counts)
+var_counts <- var(rongelap$counts)
+# 如果方差远大于均值，考虑负二项分布
+fit_rongelap_bru <- bru(
+  cmp,
+  family = "nbinomial",
+  data = rongelap,
+  E = rongelap$time
+)
+
+summary(fit_rongelap_bru)
+bri.hyperpar.summary(fit_rongelap_bru)
+```
+
+空间范围表示空间相关性的距离尺度，均值约为4014.32，说明空间效应在这一距离内显著相关。offset系数显著95%CI包括0，不显著。
+
+以海岸线为边界生成规则网格，首先连接点 POINT 构造多边形 POLYGON 对象。POINT 和 POLYGON 是 sf 包内建的基础的几何类型，其它复杂的空间类型是由它们衍生而来。函数 st_geometry 提取空间点数据中的几何元素，再用函数 st_combine 将点组合起来，最后用函数 st_cast 转换成 POLYGON 多边形类型。为了确保覆盖整个岛，处理好边界问题，需要一点缓冲空间，就是说在给定的边界线外围再延伸一段距离，构造一个更大的多边形，这可以用函数 st_buffer() 实现。
+```{r}
+# 将海岸线转换为多边形
+rongelap_coastline_sfp <- rongelap_coastline %>%
+  st_combine() %>%
+  st_cast("POLYGON")
+# 创建50米缓冲区
+rongelap_coastline_buffer <- rongelap_coastline_sfp %>%
+  st_buffer(dist = 50) %>%
+  st_as_sf()
+# 在缓冲区内创建网格
+rongelap_grid <- rongelap_coastline_buffer %>%
+  st_make_grid(n = c(150, 75)) %>%
+  st_as_sf() %>%
+  # 只保留与缓冲区相交的网格
+  filter(st_intersects(., rongelap_coastline_buffer, sparse = FALSE)[,1])
+# 计算网格中心点坐标
+rongelap_grid_centroid <- rongelap_grid %>%
+  st_centroid() |> 
+  st_set_geometry("geometry")
+
+ggplot() +
+  geom_sf(data = rongelap_coastline_sfp, 
+          fill = NA, color = "gray30", linewidth = 0.5) +
+  geom_sf(data = rongelap_grid, fill = NA, color = "gray30") +
+  theme_void()
+```
+
+利用函数 st_make_grid() 根据朗格拉普岛海岸缓冲线构造网格，朗格拉普岛是狭长的，因此，网格是 
+ 的，意味着水平方向 75 行，垂直方向 150 列。创建预测数据框
+
+```{r}
+rongelap_pred_data <- rongelap_grid_centroid %>%
+  mutate(time = 1) 
+```
+
+# 使用模型进行预测
+```{r}
+pred_rongelap <- predict(
+  fit_rongelap_bru,
+  newdata = rongelap_pred_data,
+  ~ exp(Intercept + spatial + offset_term * log(time)),  # 线性预测子的指数变换
+  n.samples = 1000  # 贝叶斯预测样本数
+)
+
+# 将预测结果添加到网格数据
+rongelap_pred_data$pred_mean <- pred_rongelap$mean
+rongelap_pred_data$pred_sd <- pred_rongelap$sd
+rongelap_pred_data$pred_q025 <- pred_rongelap$q0.025
+rongelap_pred_data$pred_q975 <- pred_rongelap$q0.975
+
+# 预测均值图
+p1 <- ggplot() +
+  geom_sf(data=rongelap_pred_data,aes(color = pred_mean)) +
+  scale_color_viridis_c(option = "C", breaks = 0:12,
+  guide = guide_colourbar(
+      barwidth = 1, barheight = 5
+  ))+
+  theme_void() 
+
+# 预测不确定性图
+p2 <- ggplot() +
+  geom_sf(data=rongelap_pred_data,aes(color = pred_sd)) +
+  scale_color_viridis_c(option = "C", breaks = 0:12,
+  guide = guide_colourbar(
+      barwidth = 1, barheight = 5
+  ))+
+  theme_void() 
+
+# 高风险区域识别
+# 定义高风险阈值（例如95分位数）
+high_risk_threshold <- quantile(rongelap_pred_data$pred_mean, 0.95)
+rongelap_pred_data$high_risk <- rongelap_pred_data$pred_mean > high_risk_threshold
+# 高风险区域可视化
+p3 <- ggplot() +
+  geom_sf(data=rongelap_pred_data,aes(color = high_risk)) +
+  labs(title = paste0("高风险区域识别 (阈值: ", round(high_risk_threshold, 2), ")")) +
+  theme_void() 
+
+(p1+p2)/p3
+```

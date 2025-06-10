@@ -2,6 +2,7 @@ library(tidyverse)
 library(brms)
 library(INLA)
 library(inlabru)
+library(sf)
 # remotes::install_github("julianfaraway/brinla")
 library(brinla)
 library(bayesplot)
@@ -9,6 +10,9 @@ library(INLAspacetime)
 library(haven)
 library(knitr)
 library(kableExtra)
+library(patchwork)
+library(viridis)
+library(SpatialEpi)
 
 format_kable_table <- function(data, width = NULL, align = NULL) {
   # 导入必要的包（如果尚未加载）
