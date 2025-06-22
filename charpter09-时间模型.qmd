@@ -1,3 +1,224 @@
 # 时间模型 
+```{r}
+#| warning: false
+source('scripts/utils.R')
+```
 
-## inla实现
+## 自回归模型
+AR(p)模型：标准自回归模型
+VAR模型：向量自回归（多变量）
+ARIMA(p,d,q)：包含自回归成分
+TAR模型：门限自回归
+GARCH模型：广义自回归条件异方差
+
+### 数据
+AirPassengers 数据集包含了从 1949 年到 1960 年的每月国际航空乘客总数。这是一个时间序列数据集，意味着它包含在一段时间内（在这种情况下为每月）以固定间隔收集的数据点。数据集仅包含一个变量，表示以千为单位的国际航空乘客数量。
+```{r}
+data(AirPassengers,package = 'datasets')
+AirPassengers |> 
+  as_tibble() |> 
+  rename('numbers' = 'x') |> 
+  mutate(
+    numbers = as.numeric(numbers),
+    year = rep(1949:1960, each = 12),
+    month = rep(1:12, 12),
+    time = 1:n() 
+  ) -> AirPassengers
+```
+
+```{r}
+cmp <- numbers ~
+  Intercept(1) +
+  trend(year, model = 'ar1',
+        hyper = list(
+          prec = list(prior = "pc.prec", param = c(1, 0.01)),
+          rho = list(prior = "pc.cor1", param = c(0.7, 0.7))
+        )) +
+  seasonal(month, model = 'seasonal', season.length = 12,
+           hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01))))
+
+airPassengers_ar <- bru(cmp, data = AirPassengers, family = "gaussian",
+                       control.family = list(
+                         hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+                       ))
+summary(airPassengers_ar)
+```
+
+year趋势AR1相关系数(Rho)：-0.955非常接近1，说明年度趋势有很强的自相关性。除AR模型外，还可使用带PC先验的1阶段随机游走模型。
+
+```{r}
+# 带PC先验
+cmp <- numbers ~ 
+  Intercept(1) + 
+  trend(year, 
+        model = 'rw2',
+        hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
+  seasonal(month, 
+           model = 'seasonal', 
+           season.length = 12,
+           hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01))))
+
+airPassengers_rw <- bru(
+  cmp, 
+  data = AirPassengers,
+  family = "gaussian",
+  control.family = list(
+    hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+  )
+)
+summary(airPassengers_rw)
+```
+
+使用airPassengers_ar模型对1961年每月国际航空乘客总数进行预测。
+```{r}
+future_data <- data.frame(
+  year = rep(1961, 12),
+  month = 1:12,
+  time = 145:156
+)
+
+predictions <- predict(airPassengers_ar, 
+                      newdata = future_data, 
+                      ~ c(Intercept + trend + seasonal))
+
+ggplot(predictions, aes(x = month)) +
+  geom_line(aes(y = mean, color = "预测值"), linewidth = 1) +
+  geom_ribbon(aes(ymin = `q0.025`, ymax = `q0.975`), alpha = 0.3) +
+  labs(title = "航空乘客数量：预测值",
+       x = "时间", 
+       y = "乘客数量",
+       color = "图例") +
+  theme_minimal()
+```
+
+## 非高斯模型
+
+### 数据
+earthquake 数据集记录了1900-2006年每年7级及以上的地震次数。
+```{r}
+earthquake <- readRDS('data/earthquake.rds')
+earthquake |> 
+  mutate(year=1900:2006) -> earthquake
+
+var_desc <- data.frame(
+  变量名 = names(earthquake),
+  描述 = c(
+    "7级及以上的地震次数",
+    "年份"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+使用1阶随机游走模型拟合该数据，因为地震次数符合poisson分布，需要设置family='poisson'
+```{r}
+cmp <- number ~ 1 + year(year,model='rw1')
+earthquake_rw <- bru(cmp,data=earthquake,family='poisson')
+summary(earthquake_rw)
+```
+
+年份随机效应的精度82.48较高，意味着相邻年份间的变异相对较小，表明地震数量的年际变化相对平稳。截距项的后验均值为2.922，在对数尺度上，这对应着 exp(2.922) ≈ 18.6 的基准地震数量，95%可信区间相对较窄，表明估计较为精确。
+
+## 状态空间模型
+
+状态空间模型允许系数及其他潜在效应随时间变化，潜在效应用具有大方差的iid分布进行建模。
+
+### 数据
+数据集包含从 1983 年到 1997 年美国 51 个州每年的交通事故死亡人数和其他相关变量。在此期间，许多州通过了关于强制使用座椅安全带的法律。我们区分两种类型的法律：次级执行法律和初级执行法律。次级执行意味着警方只有在因其他违法行为被拦截时才能对违规者罚款，而初级执行则允许警方根据座椅安全带使用违规行为本身进行拦截和罚款。此数据集名为 SeatBelt，可以
+
+```{r}
+library(dynamite)
+data("SeatBelt", package = "pder")
+
+SeatBelt <- SeatBelt |>
+  mutate(
+    miles = (vmturban + vmtrural) / 10000,
+    log_miles = log(miles),
+    fatalities = farsocc,
+    income10000 = percapin / 10000,
+    law = factor(
+      case_when(
+        dp == 1 ~ "primary",
+        dsp == 1 ~ "primary",
+        ds == 1 & dsp == 0 ~ "secondary",
+        TRUE ~ "no_law"
+      ),
+      levels = c("no_law", "secondary", "primary")
+    )
+  )
+```
+
+想研究安全带法律如何通过影响安全带使用率来减少车内乘员的交通死亡事故。为此，建立了一个联合模型，同时分析安全带使用率和死亡人数。我们用$\beta$分布来模拟安全带使用率，假设使用率受到安全带法律力度、州级效应（用随机截距建模）以及整体随时间变化的趋势（用样条曲线建模）的影响，这能捕捉美国安全带使用普遍趋势的变化。用负二项分布来模拟死亡人数，以总行驶里程作为偏移量。除了安全带使用率和州级随机截距外，还加入了交通密度、限速、酒精使用和收入等多个控制变量。首先构建模型公式，定义响应变量的分布、每个变量的协变量以及用于时间变化效应的样条曲线：使用 random(~1) 来定义群体特定的随机效应，varying(~1) 来定义随时间变化的截距项，splines(df = 10) 来定义随时间变化截距的样条曲线的自由度。
+
+```{r}
+seatbelt_formula <-
+  obs(usage ~ -1 + law + random(~1) + varying(~1), family = "beta") +
+  obs(
+    fatalities ~ usage + densurb + densrur +
+      bac08 + mlda21 + lim65 + lim70p + income10000 + unemp + fueltax +
+      random(~1) + offset(log_miles),
+    family = "negbin"
+  ) +
+  splines(df = 10)
+
+fit <- dynamite(
+  dformula = seatbelt_formula,
+  data = SeatBelt, time = "year", group = "state",
+  chains = 4, refresh = 0
+)
+
+summary(fit, types = "beta", response = "usage") |>
+  select(parameter, mean, sd, q5, q95)
+```
+
+通过 summary() 方法提取估计的系数，结果显示二级执法和一级执法的安全带法律都有明显的正向效应。通过 fitted() 方法估计了边际均值，该方法返回给定协变量下每个时间点响应变量期望值的后验样本。为此，我们为法律力度的每个级别创建一个新的数据框，并假设每个州都执行该特定法律。然后使用这些数据调用 fitted()，计算各州的后验样本平均值，最后计算总体平均值
+
+```{r}
+seatbelt_new <- SeatBelt
+seatbelt_new$law[] <- "no_law"
+pnl <- fitted(fit, newdata = seatbelt_new)
+seatbelt_new$law[] <- "secondary"
+psl <- fitted(fit, newdata = seatbelt_new)
+seatbelt_new$law[] <- "primary"
+ppl <- fitted(fit, newdata = seatbelt_new)
+bind_rows(no_law = pnl, secondary = psl, primary = ppl, .id = "law") |>
+  mutate(
+    law = factor(law, levels = c("no_law", "secondary", "primary"))
+  ) |>
+  group_by(law, .draw) |>
+  summarize(mm = mean(usage_fitted)) |>
+  group_by(law) |>
+  summarize(
+    mean = mean(mm),
+    q5 = quantile(mm, 0.05),
+    q95 = quantile(mm, 0.95)
+  )
+```
+
+过比较各州每年总死亡人数的差异，并利用 fitted() 方法对各年份取平均值来实现这一分析
+
+```{r}
+seatbelt_new <- SeatBelt
+seatbelt_new$usage[] <- 0.68
+p68 <- fitted(fit, newdata = seatbelt_new)
+seatbelt_new$usage[] <- 0.90
+p90 <- fitted(fit, newdata = seatbelt_new)
+bind_rows(low = p68, high = p90, .id = "usage") |>
+  group_by(year, .draw) |>
+  summarize(
+    s = sum(
+      fatalities_fitted[usage == "low"] -
+        fatalities_fitted[usage == "high"]
+    )
+  ) |>
+  group_by(.draw) |>
+  summarize(m = mean(s)) |>
+  summarize(
+    mean = mean(m),
+    q5 = quantile(m, 0.05),
+    q95 = quantile(m, 0.95)
+  )
+```
+
+模型没有包含任何滞后响应变量作为协变量，因此使用 fitted() 方法为每个时间点独立计算预测就足够了。
