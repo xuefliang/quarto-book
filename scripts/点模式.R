@@ -191,7 +191,7 @@ chorley_extra <- data.frame(
 # 创建网格
 coords <- st_coordinates(chorley)
 initial_range <- diff(range(coords[, "X"])) / 3
-max_edge <- initial_range / 4
+max_edge <- initial_range / 5
 
 mesh <- fm_mesh_2d(
   loc = st_coordinates(chorley),
@@ -229,13 +229,8 @@ fit.lun <- lgcp(
   options = list(
     control.inla = list(
       reordering = "metis",
-      strategy = "gaussian",
-      int.strategy = "auto",      # 使用条件坐标下降
-      control.vb = list(
-        enable = FALSE         # 完全禁用VB校正
-      )
+      int.strategy = "eb"
     ),
-    inla.mode = "compact",       # 使用紧凑模式以提高稳定性
     verbose = FALSE
   )
 )
@@ -325,40 +320,51 @@ p4 <- ggplot() +
 
 
 # Chorley-Ribble 数据集还包含一个废弃的焚烧厂的位置，这可能会影响病例的外观。因此，至少考虑焚烧厂对病例强度的影响是很方便的
-# 定义协变量函数：计算到焚烧炉的距离
+# 将网格点转换为sf对象
+mesh_pts <- st_as_sf(
+  data.frame(x = mesh$loc[, 1], y = mesh$loc[, 2]),
+  coords = c("x", "y"),
+  crs = 27700
+)
+
+# 计算网格点到焚化炉的距离
+distances <- st_distance(mesh_pts, chorley_extra)[, 1]
+
+# 创建空间像素网格
+pix_cov_grid <- fm_pixels(mesh)
+pix_cov <- pix_cov_grid
+pix_cov$cov1 <- fm_evaluate(mesh, loc = pix_cov_grid, field = as.numeric(distances))
+
+# 定义协变量函数
 f_cov1 <- function(where) {
-  # 将输入点转换为sf对象
-  if (inherits(where, "Spatial")) {
-    where <- st_as_sf(where)
-  } else if (is.matrix(where) || is.data.frame(where)) {
-    where <- st_as_sf(data.frame(x = where[, 1], y = where[, 2]), 
-                      coords = c("x", "y"), crs = st_crs(chorley))
+  # 使用最近邻插值
+  nearest_indices <- st_nearest_feature(where, pix_cov)
+  v <- pix_cov$cov1[nearest_indices]
+  if (any(is.na(v))) {
+    v[is.na(v)] <- mean(pix_cov$cov1, na.rm = TRUE)
   }
-  # 计算到焚烧炉的距离（单位：千米）
-  dist <- st_distance(where, chorley_extra[1, ], by_element = TRUE) %>% 
-          as.numeric() / 1000
-  return(dist)
+  return(v)
 }
 
-# 定义模型公式
-cmp <- geometry ~ -1 + 
-  Inter.con(1, model = "const") + 
-  Inter.lar(1, model = "const") +
-  sharedspde(geometry, model = spde) +
+f_cov1(chorley[1:5, ])
+
+# 定义模型组件
+cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
+  sharedspde(geometry, model=spde) +
   larspde(f_cov1(geometry), model = "linear")
 
-# 定义似然
+# 定义似然函数
 con.lik <- bru_obs(
   family = "cp",
   formula = geometry ~ Inter.con + sharedspde,
-  data = chorley %>% filter(type == "lung"),
+  data = chorley |> filter(type == 'lung'),
   domain = list(geometry = mesh)
 )
 
 lar.lik <- bru_obs(
   family = "cp",
   formula = geometry ~ Inter.lar + sharedspde + larspde,
-  data = chorley %>% filter(type == "larynx"),
+  data = chorley |> filter(type == 'larynx'),
   domain = list(geometry = mesh)
 )
 
@@ -367,70 +373,143 @@ fit2 <- bru(cmp, con.lik, lar.lik,
   options = list(
     control.inla = list(
       reordering = "metis",
-      int.strategy = "eb",
-      h = 0.01
-    ),verbose = F)
-  )
-
-# 查看结果
-summary(fit2)
-
-# 1. 提取网格节点坐标
-grid.pts <- mesh$loc[, 1:2]  # 只取x, y坐标
-grid.pts.sf <- st_as_sf(data.frame(x = grid.pts[,1], y = grid.pts[,2]), 
-                        coords = c("x", "y"), 
-                        crs = st_crs(chorley))
-# 2. 计算网格节点到焚烧炉的距离
-grid_dist <- st_distance(grid.pts.sf, chorley_extra |> slice(rep(1, mesh$n)), by_element = TRUE) %>% as.numeric()
-# 3. 将网格转换为空间像素对象
-pix_cov_grid <- fm_pixels(mesh)
-# 4. 在网格的每个三角形上进行线性插值
-pix_cov_values <- fm_evaluate(
-  mesh = mesh,
-  loc = pix_cov_grid,
-  field = grid_dist
-)
-
-# 创建 SpatRaster 对象
-library(terra)
-pix_cov <- rast(pix_cov_grid, vals = pix_cov_values)
-
-# 5. 定义协变量评估函数
-f.cov1 <- function(where) {
-  v <- eval_spatial(pix_cov, where) 
-  return(v)
-}
-
-cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
-  sharedspde(geometry, model=spde) +
-  larspde(f.cov1(.data.), model = "linear")
-
-# Likelihood for the controls (lung cancer)
-con.lik <- bru_obs(
-  family = "cp",
-  formula = geometry ~ Inter.con + sharedspde,
-  data = chorley |> filter(type=='lung'),
-  domain = list(geometry = mesh)
-)
-
-# Likelihood for the cases (larynx cancer)
-lar.lik <- bru_obs(
-  family = "cp",
-  formula = geometry ~ Inter.lar + sharedspde + larspde,
-  data = chorley |> filter(type=='larynx'),
-  domain = list(geometry = mesh)
-)
-
-fit2 <- bru(cmp, con.lik, lar.lik, 
-  options = list(
-    control.inla = list(
-      reordering = "metis",
       int.strategy = "eb"
     ),
     verbose = F
-  ))
+  )
+)
 
 summary(fit2)
 
 # 除了考虑到焚烧炉距离的线性项外， 其他非线性平滑项可以基于距离使用 单维或 一维中的随机游走或高斯过程（也可以使用 SPDE 方法进行估计）。接下来，将考虑一阶的高斯过程和二阶的随机游走来模拟距离的影响。除了考虑垃圾焚烧厂的距离线性项外，还可以根据距离使用一维 SPDE、随机游走或一维高斯过程（也可以使用 SPDE 方法进行估计）包含其他非线性平滑项。接下来，将考虑一阶高斯过程和二阶随机游走来建模距离的影响。
 
+####一维SPDE 
+library(tidyverse)
+library(sf)
+library(INLA)
+library(inlabru)
+library(fmesher)
+library(patchwork)
+
+# 加载数据
+data(chorley, package = 'spatstat.data')
+
+# 将spatstat点模式对象转换为sf数据框
+chorley <- data.frame(
+  x = chorley$x,
+  y = chorley$y,
+  type = factor(chorley$marks)
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = 27700) 
+
+chorley_extra <- data.frame(
+  x = chorley.extra$incin$x,
+  y = chorley.extra$incin$y
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = 27700) |> 
+  slice(rep(1, nrow(chorley)))
+
+# 创建网格
+coords <- st_coordinates(chorley)
+initial_range <- diff(range(coords[, "X"])) / 3
+max_edge <- initial_range / 5
+
+mesh <- fm_mesh_2d(
+  loc = st_coordinates(chorley),
+  max.edge = c(1, 2) * max_edge,
+  cutoff = max_edge/10,
+  crs = st_crs(chorley)
+)
+
+# 定义二维SPDE模型（共享空间效应）
+prior_range <- initial_range
+prior_sigma <- 1
+
+spde <- inla.spde2.pcmatern(
+  mesh = mesh,
+  alpha = 2,
+  prior.range = c(prior_range, 0.8),
+  prior.sigma = c(prior_sigma, 0.1)
+)
+
+# 步骤1：计算网格点到焚化炉的距离
+grid_pts <- mesh$loc[, 1:2]
+grid_dist <- as.numeric(st_distance(
+  st_as_sf(data.frame(x = grid_pts[,1], y = grid_pts[,2]), 
+           coords = c("x", "y"), crs = 27700),
+  chorley_extra[1,]
+))
+
+# 步骤2：创建空间像素网格并插值
+pix_cov_grid <- fm_pixels(mesh)
+pix_cov <- pix_cov_grid
+pix_cov$cov1 <- fm_evaluate(mesh, loc = pix_cov_grid, field = grid_dist)
+
+# 修正协变量函数
+f_cov1 <- function(where) {
+  # 使用最近邻插值
+  nearest_indices <- st_nearest_feature(where, pix_cov)
+  v <- pix_cov$cov1[nearest_indices]
+  if (any(is.na(v))) {
+    v[is.na(v)] <- mean(pix_cov$cov1, na.rm = TRUE)
+  }
+  return(v)
+}
+
+cov_dist <- chorley |> filter(type == 'larynx') |> f_cov1()
+
+# 步骤4：建立一维网格和一维SPDE效应
+mesh_cov <- fm_mesh_1d(
+  seq(0, round(max(cov_dist)), length = 20),
+  degree = 2,
+  boundary = c("free", "dirichlet")
+)
+
+# 创建一维SPDE基函数
+spde_cov <- inla.spde2.matern(
+  mesh = mesh_cov, 
+  alpha = 2, 
+  constr = TRUE
+)
+
+# # a Random Walk of order 2
+# spde_cov <- inla.spde2.pcmatern(
+#   mesh = mesh_cov, alpha=2,
+#   constr = FALSE,
+#   prior.range = c(10, NA),
+#   prior.sigma = c(1, 0.05))
+
+# 步骤5：定义模型组件
+cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
+  conSpde(geometry, model = spde) +
+  cov.lar(f_cov1(geometry), model = spde_cov)
+
+# 定义似然函数
+con.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.con + conSpde,
+  data = chorley |> filter(type == 'lung'),
+  domain = list(geometry = mesh)
+)
+
+lar.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.lar + conSpde + cov.lar,
+  data = chorley |> filter(type == 'larynx'),
+  domain = list(geometry = mesh)
+)
+
+# 步骤6：拟合模型
+fit_1d_spde <- bru(cmp, con.lik, lar.lik,
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = TRUE  # 改为TRUE以查看更多信息
+  )
+)
+
+summary(fit_1d_spde)
+
+brinla::bri.hyperpar.summary(fit_1d_spde)
