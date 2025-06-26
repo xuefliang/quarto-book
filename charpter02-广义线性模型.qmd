@@ -5,6 +5,83 @@
 source('scripts/utils.R')
 ```
 
+## 理论原理
+
+贝叶斯广义线性模型(Bayesian Generalized Linear Model, BGLM)是将贝叶斯推断框架与传统广义线性模型(GLM)相结合的统计方法。与频率派GLM不同，BGLM通过引入先验分布来表达参数的不确定性，并通过贝叶斯定理更新这些参数的后验分布。贝叶斯框架的核心优势在于它能够：
+1. 直接量化参数估计的不确定性
+2. 通过先验分布整合领域知识
+3. 处理小样本数据集的情况
+4. 提供完整的预测分布而非点估计
+
+BGLM保留了GLM的链接函数机制，使模型能够处理非正态分布的响应变量，同时添加了贝叶斯层次结构来处理参数推断。
+
+## 数学描述
+
+### 模型定义
+
+假设我们有响应变量 $\mathbf{y} = (y_1, y_2, \ldots, y_n)^T$ 和预测变量矩阵 $\mathbf{X} \in \mathbb{R}^{n \times p}$。贝叶斯广义线性模型可以表述为：
+
+$$y_i \sim F(\mu_i, \phi)$$
+
+其中 $F$ 是指数族分布，$\mu_i$ 是 $y_i$ 的期望，$\phi$ 是离散参数。期望 $\mu_i$ 通过链接函数 $g$ 与线性预测器关联：
+
+$$g(\mu_i) = \eta_i = \mathbf{x}_i^T {\beta}$$
+
+其中 $\mathbf{x}_i^T$ 是预测变量矩阵的第 $i$ 行，${\beta} = (\beta_1, \beta_2, \ldots, \beta_p)^T$ 是回归系数向量。
+
+### 先验分布
+
+在贝叶斯框架中，我们需要为模型参数指定先验分布。常见的先验设置包括：
+
+1. 回归系数 ${\beta}$ 的先验：
+   $${\beta} \sim \mathcal{N}({\mu}_0, {\Sigma}_0)$$
+ 
+   其中 ${\mu}_0$ 是先验均值向量，${\Sigma}_0$ 是先验协方差矩阵。
+
+2. 对于离散参数 $\phi$，根据具体分布可以选择共轭先验，例如：
+   - 对于正态分布的方差参数，可以使用逆伽马分布
+   - 对于二项分布，通常不需要额外的离散参数
+   - 对于泊松分布，同样不需要额外的离散参数
+
+### 后验分布
+
+根据贝叶斯定理，参数 ${\beta}$ 的后验分布为：
+
+$$p({\beta}|\mathbf{y}, \mathbf{X}) \propto p(\mathbf{y}|\mathbf{X}, {\beta}) \times p({\beta})$$
+
+其中 $p(\mathbf{y}|\mathbf{X}, {\beta})$ 是似然函数，$p({\beta})$ 是先验分布。
+
+对于非共轭先验情况，后验分布通常没有闭合形式，需要使用马尔可夫链蒙特卡洛(MCMC)方法或变分贝叶斯(VB)方法进行近似推断：
+
+$$p({\beta}|\mathbf{y}, \mathbf{X}) \approx \frac{1}{M} \sum_{m=1}^M \delta_{{\beta}^{(m)}}({\beta})$$
+
+其中 ${\beta}^{(m)}$ 是从后验分布中抽取的第 $m$ 个样本，$M$ 是样本总数，$\delta$ 是狄拉克函数。
+
+### 预测分布
+
+贝叶斯框架的一个主要优势是能够直接获得预测分布。对于新输入 $\mathbf{x}_*$，预测分布为：
+
+$$p(y_*|\mathbf{x}_*, \mathbf{y}, \mathbf{X}) = \int p(y_*|\mathbf{x}_*, {\beta}) p({\beta}|\mathbf{y}, \mathbf{X}) d{\beta}$$
+
+通过MCMC方法，预测分布可以近似为：
+
+$$p(y_*|\mathbf{x}_*, \mathbf{y}, \mathbf{X}) \approx \frac{1}{M} \sum_{m=1}^M p(y_*|\mathbf{x}_*, {\beta}^{(m)})$$
+
+### 模型选择
+
+贝叶斯模型选择通常基于以下指标：
+
+1. 偏差信息准则(DIC)：
+   $$\text{DIC} = -2\log(p(\mathbf{y}|\hat{{\beta}})) + 2p_D$$
+ 
+   其中 $p_D$ 是有效参数数量。
+
+2. 渐近模型选择：
+   $$\text{WAIC} = -2\sum_{i=1}^n \log\left(\frac{1}{M}\sum_{m=1}^M p(y_i|\mathbf{x}_i, {\beta}^{(m)})\right) + 2p_{\text{WAIC}}$$
+
+3. 贝叶斯因子：
+   $$B_{12} = \frac{p(\mathbf{y}|M_1)}{p(\mathbf{y}|M_2)} = \frac{\int p(\mathbf{y}|{\beta}_1, M_1)p({\beta}_1|M_1)d{\beta}_1}{\int p(\mathbf{y}|{\beta}_2, M_2)p({\beta}_2|M_2)d{\beta}_2}$$
+
 ## 二元响应变量
 
 ### 数据

@@ -5,6 +5,154 @@
 source('scripts/utils.R')
 ```
 
+# 时空模型理论增强
+
+## 原文内容
+时空模型是一类处理具有时间和空间维度数据的统计或数学模型。
+
+## 理论原理
+
+时空模型（Spatio-temporal models）提供了一个统一框架，用于分析和预测在时间和空间上同时变化的复杂系统。这类模型建立在随机过程理论、统计物理学和地统计学的基础之上，主要解决数据在时间和空间上的自相关性及其交互作用问题。
+
+时空建模的核心理论可以追溯到Whittle (1954)的工作，他首次提出了将空间和时间组件分离处理的方法。现代时空模型主要分为三大类：
+
+1. **分离模型（Separable models）**：假设时间和空间过程可以分离，即时空协方差函数可以表示为时间协方差和空间协方差的乘积。
+2. **非分离模型（Non-separable models）**：考虑时间和空间之间的复杂交互作用，不假设协方差函数可分离。
+3. **动态模型（Dynamic models）**：通过状态空间表示或时序自回归结构捕捉系统的动态演化。
+
+## 数学描述
+
+### 时空随机过程
+
+设 $Z(\mathbf{s},t)$ 表示在空间位置 $\mathbf{s} \in D \subset \mathbb{R}^d$ 和时间点 $t \in T \subset \mathbb{R}$ 处观测到的随机变量，时空随机过程可以表示为：
+
+$$Z(\mathbf{s},t) = \mu(\mathbf{s},t) + \varepsilon(\mathbf{s},t)$$
+
+其中 $\mu(\mathbf{s},t)$ 是确定性趋势函数（均值函数），$\varepsilon(\mathbf{s},t)$ 是具有零均值的随机误差过程。
+
+### 时空协方差函数
+
+时空协方差函数定义为：
+
+$$C(\mathbf{s}_i, \mathbf{s}_j, t_i, t_j) = \text{Cov}[Z(\mathbf{s}_i, t_i), Z(\mathbf{s}_j, t_j)]$$
+
+对于平稳时空过程，协方差仅依赖于空间位置和时间点的差值：
+
+$$C(\mathbf{s}_i, \mathbf{s}_j, t_i, t_j) = C(\mathbf{s}_i - \mathbf{s}_j, t_i - t_j) = C(\mathbf{h}, u)$$
+
+其中 $\mathbf{h} = \mathbf{s}_i - \mathbf{s}_j$ 是空间滞后向量，$u = t_i - t_j$ 是时间滞后。
+
+### 分离模型
+
+在分离模型中，时空协方差函数可以表示为：
+
+$$C(\mathbf{h}, u) = C_S(\mathbf{h}) \cdot C_T(u)$$
+
+其中 $C_S(\mathbf{h})$ 是纯空间协方差函数，$C_T(u)$ 是纯时间协方差函数。
+
+### 非分离模型
+
+Cressie和Huang (1999) 提出的非分离模型形式为：
+
+$$C(\mathbf{h}, u) = \int_{\mathbb{R}^d} e^{i\mathbf{\omega}'\mathbf{h}} f(\mathbf{\omega}, u) d\mathbf{\omega}$$
+
+其中 $f(\mathbf{\omega}, u)$ 是时空谱密度函数。
+
+Gneiting (2002) 提出的一个常用非分离模型为：
+
+$$C(\mathbf{h}, u) = \frac{\sigma^2}{(a|u|^{2\alpha} + 1)^{\beta/2}} \exp\left(-\frac{c\|\mathbf{h}\|^{2\gamma}}{(a|u|^{2\alpha} + 1)^{\beta\gamma/2}}\right)$$
+
+其中 $\sigma^2 > 0$ 是总方差，$a > 0$ 是时间尺度参数，$c > 0$ 是空间尺度参数，$\alpha, \beta, \gamma \in (0, 1]$ 是平滑参数。
+
+## 动态模型
+
+动态时空模型通常采用状态空间形式，可以表示为一组层次方程：
+
+$$Z(\mathbf{s},t) = \mathbf{X}(\mathbf{s},t)'{\beta} + \mathbf{F}'\mathbf{y}(t) + \varepsilon(\mathbf{s},t)$$
+
+$$\mathbf{y}(t) = \mathbf{G}\mathbf{y}(t-1) + {\eta}(t)$$
+
+其中：
+- $Z(\mathbf{s},t)$ 是观测值
+- $\mathbf{X}(\mathbf{s},t)$ 是协变量向量
+- ${\beta}$ 是回归系数
+- $\mathbf{y}(t)$ 是隐状态向量
+- $\mathbf{F}$ 是观测矩阵
+- $\mathbf{G}$ 是状态转移矩阵
+- $\varepsilon(\mathbf{s},t) \sim N(0, \sigma_{\varepsilon}^2)$ 是观测误差
+- ${\eta}(t) \sim N(\mathbf{0}, \mathbf{Q})$ 是状态误差向量
+
+### 空间自回归模型（SAR）
+
+空间自回归模型考虑了观测值在空间上的依赖性：
+
+$$Z(\mathbf{s},t) = \rho \sum_{j=1}^{n} w_{ij} Z(\mathbf{s}_j,t) + \mathbf{X}(\mathbf{s},t)'{\beta} + \varepsilon(\mathbf{s},t)$$
+
+其中 $\rho$ 是空间自回归参数，$w_{ij}$ 是空间权重矩阵元素，表示位置 $\mathbf{s}_i$ 和 $\mathbf{s}_j$ 之间的空间关系。
+
+### 时空自回归模型（STAR）
+
+时空自回归模型同时考虑时间和空间维度上的自相关性：
+
+$$Z(\mathbf{s},t) = \phi Z(\mathbf{s},t-1) + \rho \sum_{j=1}^{n} w_{ij} Z(\mathbf{s}_j,t) + \gamma \sum_{j=1}^{n} w_{ij} Z(\mathbf{s}_j,t-1) + \mathbf{X}(\mathbf{s},t)'{\beta} + \varepsilon(\mathbf{s},t)$$
+
+其中：
+- $\phi$ 是时间自回归参数
+- $\rho$ 是空间自回归参数
+- $\gamma$ 是时空交互参数
+
+### 高斯过程时空模型
+
+高斯过程提供了一种灵活的非参数方法来建模时空数据。假设 $Z(\mathbf{s},t)$ 服从多元高斯分布：
+
+$$[Z(\mathbf{s}_1,t_1), Z(\mathbf{s}_2,t_2), ..., Z(\mathbf{s}_n,t_m)]' \sim \text{MVN}({\mu}, {\Sigma})$$
+
+其中协方差矩阵 ${\Sigma}$ 的元素由时空协方差函数 $C(\mathbf{h}, u)$ 确定。
+
+## 贝叶斯层次时空模型
+
+贝叶斯层次时空模型通过条件概率结构捕捉不同层次上的不确定性：
+
+$$p({\theta}, \mathbf{Z} | \mathbf{Y}) \propto p(\mathbf{Y} | \mathbf{Z}, {\theta}) \cdot p(\mathbf{Z} | {\theta}) \cdot p({\theta})$$
+
+其中：
+- $\mathbf{Y}$ 是观测数据
+- $\mathbf{Z}$ 是隐状态过程
+- ${\theta}$ 是模型参数
+- $p(\mathbf{Y} | \mathbf{Z}, {\theta})$ 是观测模型
+- $p(\mathbf{Z} | {\theta})$ 是过程模型
+- $p({\theta})$ 是参数先验分布
+
+## 时空点过程模型
+
+对于离散事件的时空分布，点过程模型特别有用。时空点过程的强度函数 $\lambda(\mathbf{s},t)$ 定义为单位时空区域内事件发生的期望数量：
+
+$$\lambda(\mathbf{s},t) = \lim_{\Delta s, \Delta t \to 0} \frac{E[N(B(\mathbf{s}, \Delta s) \times (t, t+\Delta t))]}{|B(\mathbf{s}, \Delta s)| \cdot \Delta t}$$
+
+其中 $N(A)$ 表示在区域 $A$ 中观察到的点数，$B(\mathbf{s}, \Delta s)$ 是以 $\mathbf{s}$ 为中心、半径为 $\Delta s$ 的球。
+
+### 条件强度模型
+
+条件强度函数定义为：
+
+$$\lambda^*(\mathbf{s},t|\mathcal{H}_t) = \lim_{\Delta s, \Delta t \to 0} \frac{P(N(B(\mathbf{s}, \Delta s) \times (t, t+\Delta t)) > 0 | \mathcal{H}_t)}{|B(\mathbf{s}, \Delta s)| \cdot \Delta t}$$
+
+其中 $\mathcal{H}_t$ 表示时间 $t$ 之前的历史过程。
+
+## 计算方法
+
+时空模型的估计和推断通常采用以下方法：
+
+1. **最大似然估计（MLE）**：
+   $$\hat{{\theta}}_{MLE} = \arg\max_{{\theta}} \log p(\mathbf{Y}|{\theta})$$
+
+2. **限制最大似然（REML）**：适用于含有随机效应的混合模型
+
+3. **马尔可夫链蒙特卡洛（MCMC）**：用于贝叶斯推断，生成来自后验分布的样本
+   $${\theta}^{(i)} \sim p({\theta}|\mathbf{Y})$$
+
+4. **集成嵌套拉普拉斯近似（INLA）**：提供贝叶斯推断的高效计算方法，特别适用于空间和时空模型
+
 我们旨在探讨英格兰全境 COVID-19 病例的传播和演变。研究的目标有两个方面：一方面，拟合一个贝叶斯空间-时间模型，以预测英格兰大陆上空间和时间的 COVID-19 感染率；另一方面，研究社会经济、人口统计和环境因素对 COVID-19 感染的影响。
 
 ## 数据

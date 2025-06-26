@@ -1,3 +1,67 @@
-# 时空模型 {# Spatio-temporal model}
+# 时空模型 {#spatio-temporal-model}
 
-该部分计划包含四个章节。
+## 理论原理
+
+时空模型融合了时间序列分析与空间统计学的核心理论，基于随机过程理论构建。其基本假设是观测数据 $Y(s,t)$ 可视为在位置 $s \in D \subset \mathbb{R}^d$ 和时间 $t \in T \subset \mathbb{R}$ 上的随机场实现。
+
+时空模型的理论框架通常基于以下分解：
+
+$$Y(s,t) = \mu(s,t) + \eta(s,t) + \epsilon(s,t)$$
+
+其中：
+- $\mu(s,t)$ 为大尺度变异组件，反映系统平均行为
+- $\eta(s,t)$ 为小尺度时空相关随机过程
+- $\epsilon(s,t)$ 为微观尺度噪声项，通常假设为独立同分布随机变量
+
+时空建模的关键在于刻画 $\eta(s,t)$ 的协方差结构，即时空协方差函数：
+
+$$C(s_i, s_j, t_i, t_j) = \text{Cov}(Y(s_i, t_i), Y(s_j, t_j))$$
+
+## 数学描述
+
+### 时空协方差函数
+
+时空协方差函数必须满足非负定性。常用的时空协方差函数模型包括：
+
+1. **可分离协方差模型**：
+   $$C(s_i, s_j, t_i, t_j) = C_S(s_i, s_j) \cdot C_T(t_i, t_j)$$
+ 
+   其中 $C_S$ 为纯空间协方差函数，$C_T$ 为纯时间协方差函数。
+
+2. **非可分离协方差模型**：
+   $$C(h, u) = \frac{\sigma^2}{(a|u|^{2\alpha} + 1)^{\nu}} \exp\left(-\frac{c\|h\|}{(a|u|^{2\alpha} + 1)^{\beta/2}}\right)$$
+ 
+   其中 $h = s_i - s_j$ 为空间距离，$u = t_i - t_j$ 为时间距离，$\sigma^2, a, c, \alpha, \beta, \nu$ 为模型参数。
+
+### 贝叶斯层次模型框架
+
+时空模型常采用贝叶斯层次框架表示：
+
+1. **数据层**：
+   $$Y(s,t) \mid \theta(s,t) \sim f(y \mid \theta(s,t))$$
+
+2. **过程层**：
+   $$\theta(s,t) \mid \eta \sim g(\theta \mid \eta)$$
+
+3. **参数层**：
+   $$\eta \sim h(\eta)$$
+
+其中 $f, g, h$ 分别为相应的条件概率分布，$\theta(s,t)$ 为时空随机过程，$\eta$ 为超参数。
+
+### 估计方法
+
+参数估计主要通过以下方法实现：
+
+1. **最大似然估计**：
+   $$\hat{\theta} = \arg\max_{\theta} \log L(Y \mid \theta)$$
+
+2. **受限最大似然估计**：
+   $$\hat{\theta} = \arg\max_{\theta} \log L_R(Y \mid \theta)$$
+ 
+3. **贝叶斯方法**：通过后验分布 $p(\theta \mid Y) \propto p(Y \mid \theta)p(\theta)$ 进行推断，通常使用MCMC或INLA算法实现。
+
+时空预测（kriging）公式为：
+
+$$\hat{Y}(s_0, t_0) = \mu(s_0, t_0) + \mathbf{c}^T \mathbf{\Sigma}^{-1}(\mathbf{Y} - \mathbf{\mu})$$
+
+其中 $\mathbf{c}$ 为预测位置与观测位置的协方差向量，$\mathbf{\Sigma}$ 为观测数据的协方差矩阵。

@@ -5,6 +5,76 @@
 source('scripts/utils.R')
 ```
 
+# 贝叶斯线性混合模型（Bayesian Linear Mixed Models）
+
+## 理论原理
+
+贝叶斯线性混合模型（Bayesian Linear Mixed Models, BLMMs）结合了线性混合效应模型的灵活性与贝叶斯统计推断的优势，适用于具有复杂分层结构或重复测量的数据分析。该模型通过引入固定效应和随机效应来分别处理总体趋势和组内相关性，并通过贝叶斯框架量化参数不确定性。
+
+贝叶斯线性混合模型基于以下核心理论原则：
+
+1. **贝叶斯定理**：模型参数推断基于后验分布，该分布根据贝叶斯定理由先验分布与似然函数共同决定。
+
+2. **分层模型结构**：模型包含固定效应（population-level effects）和随机效应（group-specific effects），能够同时处理组间差异和组内相关性。
+
+3. **先验信息整合**：通过为模型参数指定先验分布，可以将领域知识或之前研究结果整合入分析过程。
+
+4. **不确定性量化**：贝叶斯方法提供参数的完整后验分布，而非仅提供点估计和标准误差。
+
+## 数学描述
+
+### 模型基本形式
+
+贝叶斯线性混合模型的数学表示如下：
+
+$$
+\mathbf{y} = \mathbf{X\beta} + \mathbf{Zu} + \mathbf{\epsilon}
+$$
+
+其中：
+- $\mathbf{y}$ 是 $n \times 1$ 维响应变量向量
+- $\mathbf{X}$ 是 $n \times p$ 维固定效应设计矩阵
+- $\mathbf{\beta}$ 是 $p \times 1$ 维固定效应参数向量
+- $\mathbf{Z}$ 是 $n \times q$ 维随机效应设计矩阵
+- $\mathbf{u}$ 是 $q \times 1$ 维随机效应向量
+- $\mathbf{\epsilon}$ 是 $n \times 1$ 维随机误差向量
+
+### 贝叶斯层次结构
+
+在贝叶斯框架下，模型参数被视为随机变量，其完整规范如下：
+
+1. **似然函数**：
+   $$\mathbf{y}|\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon \sim \mathcal{N}(\mathbf{X\beta} + \mathbf{Zu}, \sigma^2_\epsilon\mathbf{I}_n)$$
+
+2. **随机效应先验**：
+   $$\mathbf{u}|\mathbf{G} \sim \mathcal{N}(\mathbf{0}, \mathbf{G})$$
+ 
+   其中 $\mathbf{G}$ 是随机效应的协方差矩阵，通常表示为：
+   $$\mathbf{G} = \text{diag}(\sigma^2_{u_1}\mathbf{I}_{q_1}, \sigma^2_{u_2}\mathbf{I}_{q_2}, ..., \sigma^2_{u_m}\mathbf{I}_{q_m})$$
+ 
+3. **固定效应先验**：
+   $$\mathbf{\beta} \sim \mathcal{N}(\mathbf{\mu}_\beta, \mathbf{\Sigma}_\beta)$$
+
+4. **方差参数先验**：
+   $$\sigma^2_\epsilon \sim \text{Inv-Gamma}(a_\epsilon, b_\epsilon)$$
+   $$\sigma^2_{u_j} \sim \text{Inv-Gamma}(a_{u_j}, b_{u_j}), \quad j = 1, 2, ..., m$$
+
+### 后验分布
+
+根据贝叶斯定理，模型参数的联合后验分布为：
+
+$$p(\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon, \mathbf{G}|\mathbf{y}) \propto p(\mathbf{y}|\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon) \cdot p(\mathbf{u}|\mathbf{G}) \cdot p(\mathbf{\beta}) \cdot p(\sigma^2_\epsilon) \cdot p(\mathbf{G})$$
+
+由于该后验分布通常没有解析解，实践中多采用马尔可夫链蒙特卡罗（MCMC）方法如吉布斯采样（Gibbs sampling）或哈密顿蒙特卡罗（HMC）算法进行近似推断。
+
+### 预测分布
+
+对于新数据点 $\mathbf{X}^*$，其预测分布为：
+
+$$p(\mathbf{y}^*|\mathbf{y}, \mathbf{X}^*, \mathbf{Z}^*) = \int p(\mathbf{y}^*|\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon, \mathbf{X}^*, \mathbf{Z}^*) \cdot p(\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon|\mathbf{y}) \, d\mathbf{\beta} \, d\mathbf{u} \, d\sigma^2_\epsilon \, d\mathbf{G}$$
+
+该积分通常通过从参数后验分布中抽样并计算条件预测来近似。
+
 ## 数据
 penicillin数据集来源于青霉素的产生，有3个变量。
 ```{r}

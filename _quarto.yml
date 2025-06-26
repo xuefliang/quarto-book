@@ -24,8 +24,7 @@ book:
       chapters:
         - charpter08-空间模型.qmd
         - charpter09-时间模型.qmd
-        - charpter10-共同区域模型.qmd
-        - charpter11-时空模型.qmd
+        - charpter10-时空模型.qmd
     - references.qmd
   appendices:
     - appendix-a.qmd

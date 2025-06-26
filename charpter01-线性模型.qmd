@@ -4,6 +4,98 @@
 source('scripts/utils.R')
 ```
 
+# 理论原理
+
+贝叶斯线性模型是将贝叶斯推断方法应用于线性回归问题的统计模型框架。不同于传统的频率派方法，贝叶斯方法将参数视为随机变量，并通过概率分布表示对参数的不确定性。贝叶斯线性回归的理论基础建立在贝叶斯定理和线性模型的统计理论上。
+
+## 线性回归模型
+
+线性回归模型假设因变量与自变量之间存在线性关系，可以表示为：
+
+$$y = X\beta + \varepsilon$$
+
+其中：
+- $y \in \mathbb{R}^n$ 是 $n \times 1$ 的响应变量向量
+- $X \in \mathbb{R}^{n \times p}$ 是 $n \times p$ 的设计矩阵
+- $\beta \in \mathbb{R}^p$ 是 $p \times 1$ 的回归系数向量
+- $\varepsilon \in \mathbb{R}^n$ 是误差项向量，通常假设 $\varepsilon \sim \mathcal{N}(0, \sigma^2I_n)$，其中 $I_n$ 是 $n$ 维单位矩阵
+
+## 贝叶斯线性回归的数学框架
+
+### 似然函数
+
+假设观测数据服从正态分布，则似然函数为：
+
+$$p(y|X, \beta, \sigma^2) = \prod_{i=1}^n \mathcal{N}(y_i|x_i^T\beta, \sigma^2) = (2\pi\sigma^2)^{-n/2}\exp\left(-\frac{1}{2\sigma^2}||y - X\beta||^2\right)$$
+
+其中 $x_i^T$ 是设计矩阵 $X$ 的第 $i$ 行，$||y - X\beta||^2 = (y - X\beta)^T(y - X\beta)$ 是欧几里得范数的平方。
+
+#### 先验分布
+
+常用的共轭先验分布设定为：
+
+1. 对回归系数 $\beta$ 的先验：$\beta \sim \mathcal{N}(\mu_0, \Sigma_0)$
+
+   $$p(\beta) = (2\pi)^{-p/2}|\Sigma_0|^{-1/2}\exp\left(-\frac{1}{2}(\beta - \mu_0)^T\Sigma_0^{-1}(\beta - \mu_0)\right)$$
+
+2. 对误差方差 $\sigma^2$ 的先验：$\sigma^2 \sim \text{IG}(a_0, b_0)$
+
+   $$p(\sigma^2) = \frac{b_0^{a_0}}{\Gamma(a_0)}(\sigma^2)^{-(a_0+1)}\exp\left(-\frac{b_0}{\sigma^2}\right)$$
+
+   其中 $\text{IG}$ 表示逆伽马分布，$a_0$ 和 $b_0$ 是形状参数和尺度参数，$\Gamma$ 是伽马函数。
+
+#### 联合先验分布
+
+如果假设 $\beta$ 和 $\sigma^2$ 先验上独立，则联合先验分布为：
+
+$$p(\beta, \sigma^2) = p(\beta)p(\sigma^2)$$
+
+#### 后验分布
+
+应用贝叶斯定理，联合后验分布为：
+
+$$p(\beta, \sigma^2|y, X) \propto p(y|X, \beta, \sigma^2)p(\beta)p(\sigma^2)$$
+
+在共轭先验设定下，可以得到封闭形式的后验分布：
+
+1. 条件后验分布 $p(\beta|y, X, \sigma^2) \sim \mathcal{N}(\mu_n, \Sigma_n)$，其中：
+
+   $$\Sigma_n = \left(\Sigma_0^{-1} + \frac{1}{\sigma^2}X^TX\right)^{-1}$$
+   $$\mu_n = \Sigma_n\left(\Sigma_0^{-1}\mu_0 + \frac{1}{\sigma^2}X^Ty\right)$$
+
+2. 条件后验分布 $p(\sigma^2|y, X, \beta) \sim \text{IG}(a_n, b_n)$，其中：
+
+   $$a_n = a_0 + \frac{n}{2}$$
+   $$b_n = b_0 + \frac{1}{2}(y - X\beta)^T(y - X\beta)$$
+
+3. 在整合掉 $\beta$ 后，$\sigma^2$ 的边缘后验分布为：
+
+   $$p(\sigma^2|y, X) \sim \text{IG}\left(a_0 + \frac{n}{2}, b_0 + \frac{1}{2}(y - X\mu_0)^T(y - X\mu_0) - \frac{1}{2}\mu_n^T\Sigma_n^{-1}\mu_n + \frac{1}{2}\mu_0^T\Sigma_0^{-1}\mu_0\right)$$
+
+4. 类似地，可以得到 $\beta$ 的边缘后验分布，是一个多元t分布。
+
+### 后验预测分布
+
+对于新观测点 $x_*$，预测分布为：
+
+$$p(y_*|x_*, y, X) = \int\int p(y_*|x_*, \beta, \sigma^2)p(\beta, \sigma^2|y, X)d\beta d\sigma^2$$
+
+在共轭先验设定下，这个积分有解析解，结果是一个t分布：
+
+$$p(y_*|x_*, y, X) \sim t_{2a_n}\left(x_*^T\mu_n, \frac{b_n}{a_n}\left(1 + x_*^T\Sigma_nx_*\right)\right)$$
+
+其中 $t_{2a_n}$ 表示自由度为 $2a_n$ 的t分布。
+
+### 马尔科夫链蒙特卡洛 (MCMC) 方法
+
+在更复杂的模型中，后验分布可能没有解析形式，需要使用MCMC方法进行近似采样：
+
+1. Gibbs采样：交替从条件后验分布 $p(\beta|y, X, \sigma^2)$ 和 $p(\sigma^2|y, X, \beta)$ 中采样
+
+2. Metropolis-Hastings算法：提出新的参数值，并根据接受概率决定是否接受
+
+MCMC链的收敛性可通过Gelman-Rubin统计量（$\hat{R}$）和有效样本大小（ESS）来评估。
+
 贝叶斯线性模型是将贝叶斯推断方法应用于线性回归问题的统计模型框架。不同于传统的频率派方法，贝叶斯方法将参数视为随机变量，并通过概率分布表示对参数的不确定性。
 
 ## 模型表示
@@ -57,8 +149,7 @@ $$\mu_n = \Sigma_n(\Sigma_0^{-1}\mu_0 + \frac{1}{\sigma^2}X^Ty)$$
 对于新观测点$x_*$，预测分布为：
 $$p(y_*|x_*, y, X) = \int p(y_*|x_*, \beta, \sigma^2)p(\beta, \sigma^2|y, X)d\beta d\sigma^2$$
 
-
-# 数据集
+## 数据集
 使用 STATA 格式的 coronary.dta 数据集。该数据集包含了一个假设的临床试验中总胆固醇水平、个体特征和干预组的信息。数据集包含200个观察值，9个变量。
 ```{r}
 coronary <- read_dta("data/coronary.dta") |> 
@@ -82,8 +173,8 @@ var_desc <- data.frame(
 format_kable_table(var_desc)
 ```
 
-# brms实现
-## 单变量分析
+## brms实现
+### 单变量分析
 在此例中，假设我们需要了解收缩压（自变量,dbp）是否与胆固醇水平（因结果,chol）有关，可以使用如下代码完成，refresh = 0可以禁止显示采样进度，silent = TRUE禁止编译消息。
 ```{r}
 formula <- chol ~ dbp
@@ -119,7 +210,7 @@ pp_check(chol_brms, nsamples = 50) +
        subtitle = "黑线为观测数据，蓝线为后验预测")
 ```
 
-## 多变量分析
+### 多变量分析
 多变量分析涉及多个预测变量。在该例中下考虑dbp bmi和race三个变量。
 ```{r}
 formula2 <- chol ~ dbp + bmi + race
@@ -143,8 +234,8 @@ summary(chol_brms3)
 
 舒张压:华人：-0.02（95%置信区间：-0.05至0.01），舒张压:印度人：-0.02（95%置信区间：-0.05至0.01），这些交互项表示不同种族的舒张压效应差异，但结果均不显著。
 
-# inla实现
-## 单变量分析
+## inla实现
+### 单变量分析
 ```{r}
 formula <- chol ~ dbp
 chol_inla <- inla(formula, data = coronary)
@@ -162,7 +253,7 @@ bri.fixed.plot(chol_inla,together=FALSE)
 bri.hyperpar.plot(chol_inla)
 ```
 
-## 多变量分析
+### 多变量分析
 多变量分析涉及多个预测变量。在该例中下考虑dbp bmi和race三个变量。
 ```{r}
 formula2 <- chol ~ dbp + bmi + race
@@ -182,7 +273,4 @@ summary(chol_inla3)
 舒张压与华人的交互项(dbp:racechinese)：均值：-0.020,95%可信区间：[-0.052, 0.011]
 表示华人群体中，舒张压对胆固醇的影响比参考种族弱，但差异不显著。
 舒张压与印度人的交互项(dbp:raceindian)：均值：-0.021,95%可信区间：[-0.051, 0.009]
-表示印度人群体中，舒张压对胆固醇的影响比参考种族弱，但差异不显著。
-从边缘对数似然来看，引入交互项的模型并未显著改善拟合度，可能更简单的模型（无交互项）更为合适。
-
-##岭回归
+表示印度人群体中，舒张压对胆固醇的影响比参考种族弱，但差异不显著。从边缘对数似然来看，引入交互项的模型并未显著改善拟合度，可能更简单的模型（无交互项）更为合适。
