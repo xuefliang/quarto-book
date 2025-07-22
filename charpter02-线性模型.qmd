@@ -1,0 +1,255 @@
+# 线性回归
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+贝叶斯线性模型是将贝叶斯推断方法应用于线性回归问题的统计模型框架。不同于传统的频率派方法，贝叶斯方法将参数视为随机变量，并通过概率分布表示对参数的不确定性。贝叶斯线性回归的理论基础建立在贝叶斯定理和线性模型的统计理论上。
+
+## 线性回归模型
+
+线性回归模型假设因变量与自变量之间存在线性关系，可以表示为：
+
+$$y = X\beta + \varepsilon$$
+
+其中： - $y \in \mathbb{R}^n$ 是 $n \times 1$ 的响应变量向量 - $X \in \mathbb{R}^{n \times p}$ 是 $n \times p$ 的设计矩阵 - $\beta \in \mathbb{R}^p$ 是 $p \times 1$ 的回归系数向量 - $\varepsilon \in \mathbb{R}^n$ 是误差项向量，通常假设 $\varepsilon \sim \mathcal{N}(0, \sigma^2I_n)$，其中 $I_n$ 是 $n$ 维单位矩阵
+
+## 贝叶斯线性回归
+
+### 似然函数
+
+假设观测数据服从正态分布，则似然函数为：
+
+$$p(y|X, \beta, \sigma^2) = \prod_{i=1}^n \mathcal{N}(y_i|x_i^T\beta, \sigma^2) = (2\pi\sigma^2)^{-n/2}\exp\left(-\frac{1}{2\sigma^2}||y - X\beta||^2\right)$$
+
+其中 $x_i^T$ 是设计矩阵 $X$ 的第 $i$ 行，$||y - X\beta||^2 = (y - X\beta)^T(y - X\beta)$ 是欧几里得范数的平方。
+
+#### 先验分布
+
+常用的共轭先验分布设定为：
+
+1.  对回归系数 $\beta$ 的先验：$\beta \sim \mathcal{N}(\mu_0, \Sigma_0)$
+
+    $$p(\beta) = (2\pi)^{-p/2}|\Sigma_0|^{-1/2}\exp\left(-\frac{1}{2}(\beta - \mu_0)^T\Sigma_0^{-1}(\beta - \mu_0)\right)$$
+
+2.  对误差方差 $\sigma^2$ 的先验：$\sigma^2 \sim \text{IG}(a_0, b_0)$
+
+    $$p(\sigma^2) = \frac{b_0^{a_0}}{\Gamma(a_0)}(\sigma^2)^{-(a_0+1)}\exp\left(-\frac{b_0}{\sigma^2}\right)$$
+
+    其中 $\text{IG}$ 表示逆伽马分布，$a_0$ 和 $b_0$ 是形状参数和尺度参数，$\Gamma$ 是伽马函数。
+
+#### 联合先验分布
+
+如果假设 $\beta$ 和 $\sigma^2$ 先验上独立，则联合先验分布为：
+
+$$p(\beta, \sigma^2) = p(\beta)p(\sigma^2)$$
+
+#### 后验分布
+
+应用贝叶斯定理，联合后验分布为：
+
+$$p(\beta, \sigma^2|y, X) \propto p(y|X, \beta, \sigma^2)p(\beta)p(\sigma^2)$$
+
+在共轭先验设定下，可以得到封闭形式的后验分布：
+
+1.  条件后验分布 $p(\beta|y, X, \sigma^2) \sim \mathcal{N}(\mu_n, \Sigma_n)$，其中：
+
+    $$\Sigma_n = \left(\Sigma_0^{-1} + \frac{1}{\sigma^2}X^TX\right)^{-1}$$ $$\mu_n = \Sigma_n\left(\Sigma_0^{-1}\mu_0 + \frac{1}{\sigma^2}X^Ty\right)$$
+
+2.  条件后验分布 $p(\sigma^2|y, X, \beta) \sim \text{IG}(a_n, b_n)$，其中：
+
+    $$a_n = a_0 + \frac{n}{2}$$ $$b_n = b_0 + \frac{1}{2}(y - X\beta)^T(y - X\beta)$$
+
+3.  在整合掉 $\beta$ 后，$\sigma^2$ 的边缘后验分布为：
+
+    $$p(\sigma^2|y, X) \sim \text{IG}\left(a_0 + \frac{n}{2}, b_0 + \frac{1}{2}(y - X\mu_0)^T(y - X\mu_0) - \frac{1}{2}\mu_n^T\Sigma_n^{-1}\mu_n + \frac{1}{2}\mu_0^T\Sigma_0^{-1}\mu_0\right)$$
+
+4.  类似地，可以得到 $\beta$ 的边缘后验分布，是一个多元t分布。
+
+### 后验预测分布
+
+对于新观测点 $x_*$，预测分布为：
+
+$$p(y_*|x_*, y, X) = \int\int p(y_*|x_*, \beta, \sigma^2)p(\beta, \sigma^2|y, X)d\beta d\sigma^2$$
+
+在共轭先验设定下，这个积分有解析解，结果是一个t分布：
+
+$$p(y_*|x_*, y, X) \sim t_{2a_n}\left(x_*^T\mu_n, \frac{b_n}{a_n}\left(1 + x_*^T\Sigma_nx_*\right)\right)$$
+
+其中 $t_{2a_n}$ 表示自由度为 $2a_n$ 的t分布。
+
+### 马尔科夫链蒙特卡洛 (MCMC) 方法
+
+在更复杂的模型中，后验分布可能没有解析形式，需要使用MCMC方法进行近似采样：
+
+1.  Gibbs采样：交替从条件后验分布 $p(\beta|y, X, \sigma^2)$ 和 $p(\sigma^2|y, X, \beta)$ 中采样
+
+2.  Metropolis-Hastings算法：提出新的参数值，并根据接受概率决定是否接受
+
+MCMC链的收敛性可通过Gelman-Rubin统计量（$\hat{R}$）和有效样本大小（ESS）来评估。
+
+贝叶斯线性模型是将贝叶斯推断方法应用于线性回归问题的统计模型框架。不同于传统的频率派方法，贝叶斯方法将参数视为随机变量，并通过概率分布表示对参数的不确定性。
+
+## 模型表示
+
+标准线性回归模型可表示为： $$y = X\beta + \varepsilon$$
+
+其中： - $y$是$n \times 1$的响应变量向量。 - $X$是$n \times p$的设计矩阵。 - $\beta$是$p \times 1$的回归系数向量。 - $\varepsilon$是误差项，通常假设$\varepsilon \sim \mathcal{N}(0, \sigma^2I)$
+
+## 贝叶斯参数化
+
+在贝叶斯框架中： 参数$\beta$和$\sigma^2$被视为随机变量，需要为参数指定先验分布，表示在观测数据前对参数的信念。通过贝叶斯定理结合数据更新参数的分布，得到后验分布
+
+## 先验分布设定
+
+常见的先验分布选择： - 对于$\beta$：多元正态分布$\mathcal{N}(\mu_0, \Sigma_0)$ - 对于$\sigma^2$：逆伽马分布$IG(a_0, b_0)$
+
+当使用共轭先验时，后验分布具有相同的分布族形式，便于计算。
+
+## 后验推断过程
+
+### 贝叶斯定理应用
+
+根据贝叶斯定理，参数的后验分布为： $$p(\beta, \sigma^2|y, X) \propto p(y|X, \beta, \sigma^2) \times p(\beta, \sigma^2)$$
+
+其中： - $p(y|X, \beta, \sigma^2)$是似然函数 - $p(\beta, \sigma^2)$是参数的先验分布
+
+### 后验分布计算
+
+假设使用共轭先验分布，参数$\beta$的后验分布为多元正态分布： $$\beta|y, X, \sigma^2 \sim \mathcal{N}(\mu_n, \Sigma_n)$$
+
+其中： $$\Sigma_n = (\Sigma_0^{-1} + \frac{1}{\sigma^2}X^TX)^{-1}$$ $$\mu_n = \Sigma_n(\Sigma_0^{-1}\mu_0 + \frac{1}{\sigma^2}X^Ty)$$
+
+### 预测推断
+
+对于新观测点$x_*$，预测分布为： $$p(y_*|x_*, y, X) = \int p(y_*|x_*, \beta, \sigma^2)p(\beta, \sigma^2|y, X)d\beta d\sigma^2$$
+
+## 数据集
+
+使用 STATA 格式的 coronary.dta 数据集。该数据集包含了一个假设的临床试验中总胆固醇水平、个体特征和干预组的信息。数据集包含200个观察值，9个变量。
+
+```{r}
+coronary <- read_dta("data/coronary.dta") |> 
+  as_factor()
+
+var_desc <- data.frame(
+  变量名 = names(coronary),
+  描述 = c(
+    "受试者ID",
+    "冠状动脉疾病状态，分类变量：无冠心病，有冠心病",
+    "收缩压，单位：毫米汞柱，数值型",
+    "舒张压，单位：毫米汞柱，数值型",
+    "总胆固醇水平，单位：毫摩尔/升，数值型",
+    "年龄，单位：岁，数值型",
+    "体重指数，数值型",
+    "受试者种族，分类变量：马来人，华人，印度人",
+    "受试者性别，分类变量：女性，男性"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+## brms实现
+
+### 单变量分析
+
+在此例中，假设我们需要了解收缩压（自变量,dbp）是否与胆固醇水平（因结果,chol）有关，可以使用如下代码完成，refresh = 0可以禁止显示采样进度，silent = TRUE禁止编译消息。
+
+```{r}
+formula <- chol ~ dbp
+chol_brms <- brm(formula, data = coronary,refresh = 0,silent=TRUE)
+summary(chol_brms)
+```
+
+Family: gaussian - 使用了高斯分布(正态分布)作为响应变量的分布族，适用于连续变量如胆固醇水平。Draws - MCMC参数：运行了4条独立链，每条链迭代2000次，其中前1000次为预热期(warmup)，共产生4000个后验样本。Intercept (截距):估计值为3.00，表示当舒张压为0时预测的胆固醇水平(仅是数学上的解释，实际上舒张压不可能为0)，估计标准误差是0.49，95%CI为\[2.03, 3.96\]，表示我们有95%的把握认为真实截距值在此区间内dbp (舒张压)估计值为0.04，表示舒张压每增加1 mmHg，胆固醇水平平均增加0.04 mmol/L。估计标准误差是0.01，95%CI为\[0.03, 0.05\]，不包含0，表明舒张压与胆固醇水平之间存在统计学上显著的正相关关系。Rhat值:两个参数的Rhat值都是1.00，接近理想值1，表明MCMC链收敛良好。ESS (有效样本大小):Bulk_ESS：评估后验分布整体估计的有效样本大小。Tail_ESS：评估后验分布尾部估计的有效样本大小,两个参数的ESS值都很高(\>3000)，表明采样效率良好，后验估计可靠。
+
+```{r}
+# 从 brms 模型中提取后验样本
+posterior_samples <- as.matrix(chol_brms)
+# 提取模型参数名称（通常是固定效应参数）
+param_names <- variables(chol_brms)[grepl("b_", variables(chol_brms))]
+
+# 绘制回归系数后验密度图
+mcmc_dens(posterior_samples, pars = param_names) +
+  theme_minimal() +
+  labs(title = "后验分布密度图",
+       subtitle = "模型回归系数") +
+  theme(legend.position = "bottom")
+
+# 后验样本轨迹图
+mcmc_trace(posterior_samples, pars = param_names[1:min(4, length(param_names))]) +
+  labs(title = "MCMC链轨迹图") +
+  theme_minimal()
+
+# 后验预测检验
+pp_check(chol_brms, ndraws= 50) +
+  theme_minimal() +
+  labs(title = "后验预测检验",
+       subtitle = "黑线为观测数据，蓝线为后验预测")
+```
+
+### 多变量分析
+
+多变量分析涉及多个预测变量。在该例中下考虑dbp bmi和race三个变量。
+
+```{r}
+formula2 <- chol ~ dbp + bmi + race
+chol_brms2 <- brm(formula2, data = coronary,refresh = 0,silent=TRUE)
+summary(chol_brms2)
+```
+
+截距: 4.87 (95%CI：2.30到7.39)，舒张压(dbp): 0.03 (95%CI：0.02到0.04) 舒张压每增加1单位，胆固醇平均增加0.03单位，这个效应可靠(不包含0)。 身体质量指数(bmi): -0.04 (95%CI：-0.10到0.02)，BMI每增加1单位，胆固醇平均减少0.04单位 这个效应不太可靠(CI包含0)。 种族(相对于参考类别):中国人: 0.35 (95%CI：-0.01到0.71)，效应边缘显著。印度人: 0.72 (95%CI：0.35到1.09)，效应显著，与参考种族相比胆固醇水平明显更高。Rhat值: 所有参数都是1.00，表示链收敛良好。有效样本大小(ESS): 所有参数的Bulk_ESS和Tail_ESS都很高(\>2500)，表示参数估计可靠。
+
+考虑交互作用
+
+```{r}
+formula3 <- chol ~ dbp + race + dbp:race
+chol_brms3 <- brm(formula3, data = coronary,refresh = 0,silent=TRUE)
+summary(chol_brms3)
+```
+
+种族交互项： 舒张压:华人：-0.02（95%CI：-0.05至0.01），舒张压:印度人：-0.02（95%CI：-0.05至0.01），这些交互项表示不同种族的舒张压效应差异，但结果均不显著。
+
+## inla实现
+
+### 单变量分析
+
+```{r}
+formula <- chol ~ dbp
+chol_inla <- inla(formula, data = coronary,family = 'gaussian')
+summary(chol_inla)
+```
+
+截距(Intercept)的后验均值是2.995，标准差是0.492，95%CI是\[2.030, 3.960\] dbp（可能是舒张压）的系数后验均值是0.039，标准差是0.006，95%CI是\[0.027, 0.051\] 两个系数的后验分布都表明它们显著不为0（因为95%CI不包含0）。 模型的超参数即高斯观测的精度（precision，方差的倒数）。精度的后验均值是0.875，标准差是0.087，95%CI是\[0.712, 1.05\]。
+
+展示固定效应和超参数的后验分布图，包括后验密度曲线、中位数和CI。
+
+```{r}
+bri.fixed.plot(chol_inla,together=FALSE)
+bri.hyperpar.plot(chol_inla)
+```
+
+### 多变量分析
+
+多变量分析涉及多个预测变量。在该例中下考虑dbp bmi和race三个变量。
+
+```{r}
+formula2 <- chol ~ dbp + bmi + race
+chol_inla2 <- inla(formula2, data = coronary,family = 'gaussian')
+summary(chol_inla2)
+```
+
+模型的结果和brms包的结果类似，提供了模型超参数精度(Precision)：均值：0.932，95%CI：\[0.757, 1.12\]
+
+考虑交互作用
+
+```{r}
+formula3 <- chol ~ dbp + race + dbp:race
+chol_inla3 <- inla(formula3, data = coronary,family = 'gaussian')
+summary(chol_inla3)
+```
+
+舒张压与华人的交互项(dbp:racechinese)：均值：-0.020,95%CI：\[-0.052, 0.011\] 表示华人群体中，舒张压对胆固醇的影响比参考种族弱，但差异不显著。 舒张压与印度人的交互项(dbp:raceindian)：均值：-0.021,95%CI：\[-0.051, 0.009\] 表示印度人群体中，舒张压对胆固醇的影响比参考种族弱，但差异不显著。从边缘对数似然来看，引入交互项的模型并未显著改善拟合度，可能更简单的模型（无交互项）更为合适。

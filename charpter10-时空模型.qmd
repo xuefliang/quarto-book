@@ -1,0 +1,391 @@
+# 时空模型
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+时空模型（Spatio-temporal models）提供了一个统一框架，用于分析和预测在时间和空间上同时变化的复杂系统。这类模型建立在随机过程理论、统计物理学和地统计学的基础之上，主要解决数据在时间和空间上的自相关性及其交互作用问题。
+
+时空建模的核心理论可以追溯到Whittle (1954)的工作，他首次提出了将空间和时间组件分离处理的方法。现代时空模型主要分为三大类：
+
+1. **分离模型（Separable models）**：假设时间和空间过程可以分离，即时空协方差函数可以表示为时间协方差和空间协方差的乘积。
+2. **非分离模型（Non-separable models）**：考虑时间和空间之间的复杂交互作用，不假设协方差函数可分离。
+3. **动态模型（Dynamic models）**：通过状态空间表示或时序自回归结构捕捉系统的动态演化。
+
+## 数学描述
+
+### 时空随机过程
+
+设 $Z(\mathbf{s},t)$ 表示在空间位置 $\mathbf{s} \in D \subset \mathbb{R}^d$ 和时间点 $t \in T \subset \mathbb{R}$ 处观测到的随机变量，时空随机过程可以表示为：
+
+$$Z(\mathbf{s},t) = \mu(\mathbf{s},t) + \varepsilon(\mathbf{s},t)$$
+
+其中 $\mu(\mathbf{s},t)$ 是确定性趋势函数（均值函数），$\varepsilon(\mathbf{s},t)$ 是具有零均值的随机误差过程。
+
+### 时空协方差函数
+
+时空协方差函数定义为：
+
+$$C(\mathbf{s}_i, \mathbf{s}_j, t_i, t_j) = \text{Cov}[Z(\mathbf{s}_i, t_i), Z(\mathbf{s}_j, t_j)]$$
+
+对于平稳时空过程，协方差仅依赖于空间位置和时间点的差值：
+
+$$C(\mathbf{s}_i, \mathbf{s}_j, t_i, t_j) = C(\mathbf{s}_i - \mathbf{s}_j, t_i - t_j) = C(\mathbf{h}, u)$$
+
+其中 $\mathbf{h} = \mathbf{s}_i - \mathbf{s}_j$ 是空间滞后向量，$u = t_i - t_j$ 是时间滞后。
+
+### 分离模型
+
+在分离模型中，时空协方差函数可以表示为：
+
+$$C(\mathbf{h}, u) = C_S(\mathbf{h}) \cdot C_T(u)$$
+
+其中 $C_S(\mathbf{h})$ 是纯空间协方差函数，$C_T(u)$ 是纯时间协方差函数。
+
+### 非分离模型
+
+Cressie和Huang (1999) 提出的非分离模型形式为：
+
+$$C(\mathbf{h}, u) = \int_{\mathbb{R}^d} e^{i\mathbf{\omega}'\mathbf{h}} f(\mathbf{\omega}, u) d\mathbf{\omega}$$
+
+其中 $f(\mathbf{\omega}, u)$ 是时空谱密度函数。
+
+Gneiting (2002) 提出的一个常用非分离模型为：
+
+$$C(\mathbf{h}, u) = \frac{\sigma^2}{(a|u|^{2\alpha} + 1)^{\beta/2}} \exp\left(-\frac{c\|\mathbf{h}\|^{2\gamma}}{(a|u|^{2\alpha} + 1)^{\beta\gamma/2}}\right)$$
+
+其中 $\sigma^2 > 0$ 是总方差，$a > 0$ 是时间尺度参数，$c > 0$ 是空间尺度参数，$\alpha, \beta, \gamma \in (0, 1]$ 是平滑参数。
+
+## 动态模型
+
+动态时空模型通常采用状态空间形式，可以表示为一组层次方程：
+
+$$Z(\mathbf{s},t) = \mathbf{X}(\mathbf{s},t)'{\beta} + \mathbf{F}'\mathbf{y}(t) + \varepsilon(\mathbf{s},t)$$
+
+$$\mathbf{y}(t) = \mathbf{G}\mathbf{y}(t-1) + {\eta}(t)$$
+
+其中：
+- $Z(\mathbf{s},t)$ 是观测值
+- $\mathbf{X}(\mathbf{s},t)$ 是协变量向量
+- ${\beta}$ 是回归系数
+- $\mathbf{y}(t)$ 是隐状态向量
+- $\mathbf{F}$ 是观测矩阵
+- $\mathbf{G}$ 是状态转移矩阵
+- $\varepsilon(\mathbf{s},t) \sim N(0, \sigma_{\varepsilon}^2)$ 是观测误差
+- ${\eta}(t) \sim N(\mathbf{0}, \mathbf{Q})$ 是状态误差向量
+
+### 空间自回归模型（SAR）
+
+空间自回归模型考虑了观测值在空间上的依赖性：
+
+$$Z(\mathbf{s},t) = \rho \sum_{j=1}^{n} w_{ij} Z(\mathbf{s}_j,t) + \mathbf{X}(\mathbf{s},t)'{\beta} + \varepsilon(\mathbf{s},t)$$
+
+其中 $\rho$ 是空间自回归参数，$w_{ij}$ 是空间权重矩阵元素，表示位置 $\mathbf{s}_i$ 和 $\mathbf{s}_j$ 之间的空间关系。
+
+### 时空自回归模型（STAR）
+
+时空自回归模型同时考虑时间和空间维度上的自相关性：
+
+$$Z(\mathbf{s},t) = \phi Z(\mathbf{s},t-1) + \rho \sum_{j=1}^{n} w_{ij} Z(\mathbf{s}_j,t) + \gamma \sum_{j=1}^{n} w_{ij} Z(\mathbf{s}_j,t-1) + \mathbf{X}(\mathbf{s},t)'{\beta} + \varepsilon(\mathbf{s},t)$$
+
+其中：
+- $\phi$ 是时间自回归参数
+- $\rho$ 是空间自回归参数
+- $\gamma$ 是时空交互参数
+
+### 高斯过程时空模型
+
+高斯过程提供了一种灵活的非参数方法来建模时空数据。假设 $Z(\mathbf{s},t)$ 服从多元高斯分布：
+
+$$[Z(\mathbf{s}_1,t_1), Z(\mathbf{s}_2,t_2), ..., Z(\mathbf{s}_n,t_m)]' \sim \text{MVN}({\mu}, {\Sigma})$$
+
+其中协方差矩阵 ${\Sigma}$ 的元素由时空协方差函数 $C(\mathbf{h}, u)$ 确定。
+
+## 贝叶斯层次时空模型
+
+贝叶斯层次时空模型通过条件概率结构捕捉不同层次上的不确定性：
+
+$$p({\theta}, \mathbf{Z} | \mathbf{Y}) \propto p(\mathbf{Y} | \mathbf{Z}, {\theta}) \cdot p(\mathbf{Z} | {\theta}) \cdot p({\theta})$$
+
+其中：
+- $\mathbf{Y}$ 是观测数据
+- $\mathbf{Z}$ 是隐状态过程
+- ${\theta}$ 是模型参数
+- $p(\mathbf{Y} | \mathbf{Z}, {\theta})$ 是观测模型
+- $p(\mathbf{Z} | {\theta})$ 是过程模型
+- $p({\theta})$ 是参数先验分布
+
+## 时空点过程模型
+
+对于离散事件的时空分布，点过程模型特别有用。时空点过程的强度函数 $\lambda(\mathbf{s},t)$ 定义为单位时空区域内事件发生的期望数量：
+
+$$\lambda(\mathbf{s},t) = \lim_{\Delta s, \Delta t \to 0} \frac{E[N(B(\mathbf{s}, \Delta s) \times (t, t+\Delta t))]}{|B(\mathbf{s}, \Delta s)| \cdot \Delta t}$$
+
+其中 $N(A)$ 表示在区域 $A$ 中观察到的点数，$B(\mathbf{s}, \Delta s)$ 是以 $\mathbf{s}$ 为中心、半径为 $\Delta s$ 的球。
+
+### 条件强度模型
+
+条件强度函数定义为：
+
+$$\lambda^*(\mathbf{s},t|\mathcal{H}_t) = \lim_{\Delta s, \Delta t \to 0} \frac{P(N(B(\mathbf{s}, \Delta s) \times (t, t+\Delta t)) > 0 | \mathcal{H}_t)}{|B(\mathbf{s}, \Delta s)| \cdot \Delta t}$$
+
+其中 $\mathcal{H}_t$ 表示时间 $t$ 之前的历史过程。
+
+## 计算方法
+
+时空模型的估计和推断通常采用以下方法：
+
+1. **最大似然估计（MLE）**：
+   $$\hat{{\theta}}_{MLE} = \arg\max_{{\theta}} \log p(\mathbf{Y}|{\theta})$$
+
+2. **限制最大似然（REML）**：适用于含有随机效应的混合模型
+
+3. **马尔可夫链蒙特卡洛（MCMC）**：用于贝叶斯推断，生成来自后验分布的样本
+   $${\theta}^{(i)} \sim p({\theta}|\mathbf{Y})$$
+
+4. **集成嵌套拉普拉斯近似（INLA）**：提供贝叶斯推断的高效计算方法，特别适用于空间和时空模型
+
+研究者旨在探讨英格兰全境COVID-19病例的传播和演变。研究的目标有两个方面：一方面，拟合一个贝叶斯空间-时间模型，以预测英格兰大陆上空间和时间的 COVID-19 感染率；另一方面，研究社会经济、人口统计和环境因素对 COVID-19 感染的影响。
+
+## 数据
+
+```{r}
+# 1.数据
+sf_data <- readRDS('data/spatial_dataBris.rds') %>%
+  st_as_sf(coords = c("LONG", "LAT"), crs = 4326) %>%
+  mutate(mapp = 0)
+
+covid19_sf <- readRDS('data/covid19_dataBris.rds') %>%
+  st_as_sf(coords = c("LONG", "LAT"), crs = 4326)
+
+ggplot()+
+    geom_sf(data=sf_data)+
+    geom_sf(data=covid19_sf,aes(fill=covid19_sf$cases))
+
+var_desc <- data.frame(
+  变量名 = names(covid19_sf),
+  描述 = c(
+    "地区名称",
+    "日期",
+    "周",
+    "地区ID",
+    "病例数",
+    "人口数",
+    "流行率",
+    "几何列"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+应变量是在 2020 年 3 月 7 日至 2022 年 3 月 26 日期间，英格兰主要地区 6789 个街区每周报告的 COVID-19 病例数。
+
+本研究采用贝叶斯层次模型，通过R语言INLA-SPDE方法预测英格兰街区级COVID-19感染率的时空分布，有效处理复杂的时空相关性，为疫情防控提供科学依据。模型构建包括四个关键步骤：首先，创建研究区域三角剖分网格，实现空间离散化；其次，建立SPDE模型并设置空间参数先验，建模空间连续性；然后，定义时间演化机制及时间参数先验，建模时间动态；最后，构建模型公式，整合时空效应。
+
+SPDE方法通过三角剖分网格将连续空间离散化，核心优势在于建立观测点间的人工邻居关系，实现空间自相关性计算，并将复杂连续空间过程转化为可计算的离散问题。网格质量直接影响模型推断的准确性和预测可靠性，设计不当可能导致结果偏差。使用fmesher::fm_mesh_2d_inla()函数构建二维网格，输入街区地理坐标作为初始节点，函数根据数据分布自动生成最优网格，并通过参数灵活控制网格形状、密度和扩展范围。
+
+网格分辨率由max.edge参数控制，决定三角形最大边长。推荐内域边长为空间范围的1/5，以平衡计算效率与模型精度。若max.edge值过大，可能偏离Matérn协方差结构，导致边际方差异常和模型拟合质量下降；若过小，则网格顶点激增，增加计算复杂度和时间，精度提升却有限。空间范围表示相关性降至0.13的距离，需基于领域知识或探索性分析估计。为处理边界效应，外延区域三角形密度设为内域一半，边长为内域两倍，offset参数设置内层和外层扩展，距离至少等于空间范围。
+
+SPDE模型采用INLA::inla.spde2.pcmatern()函数构建，基于Matérn协方差函数，使用惩罚复杂度（PC）先验，与INLA框架无缝集成。此方法提高数值稳定性，减少参数估计偏差，增强模型在不同数据集上的稳健性。INLA-SPDE方法在时空统计建模中具有显著优势：相比传统MCMC方法，计算速度更快；能适应复杂的时空相关结构；特别适合大规模流行病学数据分析；提供完整的贝叶斯推断和不确定性量化。
+
+```{r}
+# 2. 计算网格参数,sf_data 的 geometry 类型是 sfc_MULTIPOLYGON
+coords <- st_coordinates(sf_data)
+initial_range <- diff(range(coords[, "X"])) / 3
+max_edge <- initial_range / 2
+
+# 3.mesh
+mesh <- fm_mesh_2d_inla(sf_data,
+  max.edge=c(1, 2)* max_edge,
+  offset = c(initial_range, initial_range), 
+  cutoff=max_edge/7)
+plot(mesh)
+
+# 5. 定义 SPDE 模型
+prior_range <- initial_range
+spde <- INLA::inla.spde2.pcmatern(
+  mesh = mesh,
+  prior.range = c(prior_range, 0.5),
+  prior.sigma = c(1, 0.01)
+)
+```
+
+定义一个时空交互的模型，group_index为每个观测所属的时间点（需要从1开始），n_groups: 不同时间点（周）的总数。时间设置了一阶自回归(AR1)模型的先验分布： pccor1: PC先验分布用于自相关参数。f(): 构建时空随机场，main = st_coordinates: 指定空间坐标作为主要变量。model = spde: 使用随机场SPDE（随机偏微分方程）模型表示空间相关性。
+
+```{r}
+# 6.定义时间索引和离散时间点数量
+group_index <- covid19_sf$week
+n_groups <- length(unique(covid19_sf$week))
+rhoprior <- base::list(theta = list(prior = "pccor1", param = c(0, 0.9)))
+
+# 7.定义模型组件
+components <- cases ~ 0 + Intercept(1) + prevalence +
+  f(
+    main = st_coordinates,
+    model = spde,
+    group = group_index,
+    ngroup = n_groups,
+    control.group = list(
+      model = "ar1",
+      hyper = rhoprior
+    )
+  )
+
+# 8.拟合时空耦合模型,简介语法版本
+covid19_st <- bru(
+  components=components,
+  data = covid19_sf,
+  family = "poisson",
+  # Population作为泊松模型的期望值
+  E = covid19_sf$Population,
+  control.family = list(link = "log"),
+  options = list(
+    control.inla = list(
+      # 使用metis重排序以提高计算效率
+      reordering = "metis",
+      # 使用经验贝叶斯积分策略
+      int.strategy = "eb"
+    ),
+    # 显示详细输出
+    verbose = FALSE,
+    # 使用INLA的实验模式
+    inla.mode = "experimental"
+  )
+)
+summary(covid19_st)
+```
+
+prevalence(流行率): 82.018，95%CI\[78.316, 85.720\] 这表明流行率对因变量有显著的正向影响。Range for f: 1.152，表示空间相关性的范围。GroupRho for f: 0.749，表示时间自相关系数，接近1表示较强的时间相关性。
+
+时空交互模型的标准语法版本
+
+```{r}
+#| warning: false 
+#| eval: false
+covid19_st <- bru(
+  # 定义模型组件
+  components = ~ Intercept(1) + 
+                 prevalence(prevalence, model = "linear") +
+                 spatial_field(st_coordinates, 
+                              model = spde,
+                              group = group_index,
+                              ngroup = n_groups,
+                              control.group = list(
+                                model = "ar1",
+                                hyper = rhoprior
+                              )),
+  
+  # 观测模型
+  bru_obs = bru_obs(
+    formula = cases ~ Intercept + prevalence + spatial_field,
+    data = covid19_sf,
+    family = "poisson",
+    E = covid19_sf$Population,
+    control.family = list(link = "log")
+  ),
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = FALSE,
+    inla.mode = "experimental"
+  )
+)
+```
+
+## 时空分离模型
+
+```{r}
+# 设置时间趋势先验，
+rw1_prior <- list(theta = list(prior = "pc.prec", param = c(1, 0.01)))
+
+cmp <- cases ~
+    Intercept(1) +
+      Population +
+      prevalence +
+      site(st_coordinates(geometry), model = spde) + #site(st_coordinates)
+      trend(main = week, model = 'rw1', hyper = list(theta = rw1_prior))
+
+# week需要从1开始
+covid19_st2 <- bru(
+  components = cmp,
+  formula = cases ~ Intercept  + prevalence + site + trend, #可省略
+  data = covid19_sf,
+  family = "poisson",
+  E = covid19_sf$Population
+)
+summary(covid19_st2)
+```
+
+Range: 0.037，表示空间相关性的范围较小，空间效应比较局部化，说明COVID-19传播具有强烈的局部聚集特征。Precision: 140.100 (95% CI: 57.141-280.786)，高精度值表示相邻周之间的变化相对平滑，时间趋势变化较为稳定，没有剧烈波动。患病率系数81.309表明这是影响病例数的主要因素，已有患病率高的地区更容易出现新病例。与covid19_st比较，DIC、WAIC等指标较好。
+
+使用INLAspacetime包，实现特定的时空和空间时态模型，目前有102,121,202,220等几个特定模型。所有DEMF模型通过六个参数定义： 
+- **光滑度参数**：(αₜ, αₛ, αₑ) - 控制时间、空间和噪声过程特性 
+- **尺度参数**：(γₜ, γₛ, γₑ) - 控制时空相关范围
+
+### 四种模型对比
+
+| 模型 | (αₜ, αₛ, αₑ) | 时间光滑度 νₜ | 空间光滑度 νₛ | 类型 | 可分性 |
+|----|----|----|----|----|----|
+| DEMF(1,0,2) | (1,0,2) | 1/2 | 1 | 可分模型（1阶） | 可分 |
+| DEMF(1,2,1) | (1,2,1) | 1/2 | 1 | 临界扩散 | 非可分 |
+| DEMF(2,0,2) | (2,0,2) | 3/2 | 1 | 可分模型（2阶） | 可分 |
+| DEMF(2,2,0) | (2,2,0) | 1 | 2 | 迭代扩散 | 完全非可分 |
+
+```{r}
+library(INLAspacetime)
+# 2. 计算网格参数,sf_data 的 geometry 类型是 sfc_MULTIPOLYGON
+coords <- st_coordinates(sf_data)
+initial_range <- diff(range(coords[, "X"])) / 3
+max_edge <- initial_range / 2
+
+# 3.mesh
+smesh <- fm_mesh_2d_inla(sf_data,
+  max.edge=c(1, 2)* max_edge,
+  offset = c(initial_range, initial_range), 
+  cutoff=max_edge/7)
+plot(smesh)
+
+
+nt <- max(covid19_sf$week)
+h <- 1
+tmesh <- fm_mesh_1d(
+  loc = seq(1, nt + h/2, h), 
+  degree = 1)
+tmesh$n
+
+stmodel <- stModel.define(
+  smesh = smesh, ## spatial mesh
+  tmesh = tmesh, ## temporal mesh
+  model = '202', ## model, see the paper 102,121,202,220
+  control.priors = list(
+      prs = c(1, 0.1), ## P(spatial range < 1) = 0.1
+      prt = c(5, 0), ## temporal range fixed to 5
+      psigma = c(1, 0.1) ## P(sigma > 1) = 0.1
+      )
+  )
+
+components <- cases ~ 1 + prevalence + field(
+  list(space = st_coordinates(covid19_sf), time = week), model = stmodel)
+
+covid19_st3 <-  bru(components,
+  family = "gaussian",
+  data = covid19_sf,
+  options = list(
+    control.inla = list(
+      # 使用metis重排序以提高计算效率
+      reordering = "metis",
+      # 使用经验贝叶斯积分策略
+      int.strategy = "eb"
+    ),
+    verbose = FALSE,
+    inla.mode = "experimental",
+    control.compute = list(waic = TRUE,dic = TRUE,cpo = TRUE)
+  )
+)
+summary(covid19_st3)
+```

@@ -1,0 +1,811 @@
+# 空间模型
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+空间模型的理论基础建立在空间统计学和地理信息科学的交叉领域。空间数据具有两个核心特性：空间依赖性(Spatial Dependency)和空间异质性(Spatial Heterogeneity)。这两个特性使得传统统计分析方法在处理空间数据时面临挑战。
+
+空间依赖性体现了托布勒第一地理学定律(Tobler's First Law of Geography)："一切事物都是相关的，但是距离较近的事物比距离较远的事物相关性更强"。这种相关性通常通过空间自相关(Spatial Autocorrelation)进行量化，表示空间单元之间的相似程度与其地理距离的关系。
+
+空间异质性则表明地理现象在不同空间位置的分布、关系和过程存在差异。这种特性打破了传统统计中样本独立同分布(i.i.d.)的假设，要求我们采用特殊的空间统计模型。
+
+## 数学描述
+
+### 空间数据的形式化表示
+
+空间数据可形式化表示为：
+$$S = \{(s_i, z_i): s_i \in D, z_i \in \mathbb{R}^d, i = 1, 2, ..., n\}$$
+
+其中：
+- $s_i$ 表示第$i$个观测点的空间位置，属于空间域$D \subset \mathbb{R}^k$(通常$k=2$或$k=3$)
+- $z_i$ 表示位置$s_i$处的属性值向量，维度为$d$
+- $n$ 表示观测点的总数
+
+### 空间自相关的测量
+
+#### Moran's I 指数
+
+Moran's I 是量化空间自相关的常用统计量：
+
+$$I = \frac{n}{\sum_{i=1}^{n}\sum_{j=1}^{n}w_{ij}}\frac{\sum_{i=1}^{n}\sum_{j=1}^{n}w_{ij}(z_i-\bar{z})(z_j-\bar{z})}{\sum_{i=1}^{n}(z_i-\bar{z})^2}$$
+
+其中：
+- $w_{ij}$ 是空间权重矩阵的元素，表示位置$i$和$j$之间的空间关系
+- $\bar{z}$ 是属性值的平均值
+- I值接近1表示正空间自相关，接近-1表示负空间自相关，接近0表示随机分布
+
+#### 半变异函数(Semivariogram)
+
+半变异函数描述了空间依赖性随距离变化的关系：
+
+$$\gamma(h) = \frac{1}{2|N(h)|}\sum_{(i,j)\in N(h)}(z_i-z_j)^2$$
+
+其中：
+- $h$ 是空间距离
+- $N(h)$ 是距离为$h$的所有点对的集合
+- $|N(h)|$ 是集合$N(h)$中元素的数量
+
+### 空间回归模型
+
+#### 空间滞后模型(Spatial Lag Model)
+
+考虑空间单元之间的相互影响：
+
+$$y = \rho Wy + X\beta + \varepsilon$$
+
+其中：
+- $y$ 是因变量向量
+- $W$ 是空间权重矩阵
+- $\rho$ 是空间自回归系数
+- $X$ 是自变量矩阵
+- $\beta$ 是回归系数向量
+- $\varepsilon$ 是误差向量，假设$\varepsilon \sim N(0, \sigma^2I)$
+
+#### 空间误差模型(Spatial Error Model)
+
+考虑误差项的空间自相关：
+
+$$y = X\beta + u$$
+$$u = \lambda Wu + \varepsilon$$
+
+其中$\lambda$是空间误差参数，其他符号同上。
+
+### 克里金插值法(Kriging)
+
+克里金插值是基于半变异函数的最优线性无偏估计：
+
+$$\hat{Z}(s_0) = \sum_{i=1}^{n}\lambda_i Z(s_i)$$
+
+其中：
+- $\hat{Z}(s_0)$ 是未观测位置$s_0$的预测值
+- $\lambda_i$ 是权重系数，满足$\sum_{i=1}^{n}\lambda_i = 1$
+- 权重$\lambda_i$的求解基于最小化预测方差：$\min E[(\hat{Z}(s_0)-Z(s_0))^2]$
+
+## 空间数据的特殊性质
+
+**位置**是空间数据的核心特征，可以通过绝对位置（GPS坐标）或相对位置（与其他对象的关系）来表达。**坐标**作为量化空间位置的数学工具，可以是2D、3D或更高维度，单位的选择会影响距离计算和空间分析结果。**时间**维度为空间数据增加了动态性，包括显式和隐式时间参考。**属性**是在特定位置观测或测量的现象特征，包括可量化的测量属性和分类的观察属性。
+
+**时空交互**是空间分析的核心，涉及空间变异性、时间变异性和时空耦合现象。**参考系统**确保数据的一致性，包括空间参考系统（地理坐标系、投影坐标系）、时间参考系统和属性参考系统。
+
+**支持**概念描述了属性值与空间几何对象的关系。点支持意味着属性值在整个几何对象内恒定，如行政区名称；面/线/体支持则表示属性值是几何对象内所有点值的汇总，如区域平均温度。
+
+在空间连续性方面，连续数据如温度场在空间上形成连续的表面，而非连续数据如商店分布只在特定点位置存在。属性连续性基于Stevens的测量尺度分类，包括连续属性（区间尺度和比率尺度）和离散属性（名义尺度和序数尺度）。
+
+## 统计推断框架
+
+### 基于设计的统计
+
+在基于设计的统计框架中，随机性来源于抽样过程。考虑研究区域$B$中的观测值$z(s), s \in B$，如果随机选择样本位置，则位置$S$是随机变量。两个变量$z(S_1)$和$z(S_2)$在独立采样条件下是独立的。
+
+当包含概率恒定时（完全空间随机性），可使用样本均值：
+$$\hat{\mu} = \frac{1}{n}\sum_{j=1}^n z(s_j)$$
+
+基于设计的方法适用于估计区域内的均值，但无法预测特定位置的值。
+
+### 基于模型的统计
+
+基于模型的统计假设观测值本身具有随机性，基本模型为：
+$$Z(s) = X(s)\beta + e(s)$$
+
+可进一步分解为：
+$$Z(s) = X(s)\beta + w(s) + \epsilon$$
+
+其中$w(s)$是空间相关的信号，$\epsilon$是独立噪声。预测过程包括参数估计和空间预测两个步骤，这是地统计学的核心思想。
+
+## 空间数据类型
+
+空间数据在广泛领域中被用于支持决策，包括环境、公共卫生、生态、农业、城市规划和社会经济研究等各个方面,空间数据可以被视为来自随机过程观察的结果。
+
+$$\{Z(s) : s \in D \subset \mathbb{R}^d \},$$
+
+其中 $D$ 表示一组 $\mathbb{R}^d$，$d = 2$ 和 $Z(s)$ 的属性，该属性在 $s$ 处观察。通过域 $D$ 的特征区分三种空间数据类型，即区域（或网格）数据、地统计学数据和点模式。
+
+### 区域数据
+
+在实地或格网数据中，域 $D$ 是一组固定的可数区域或元，变量在这些单元上进行观测。实地数据通常在传统某些感觉观察覆盖的相应事件数量或总结区域的出现。例如，在空间流行病学中，具有特定疾病的个人位置通常进行区域数据，这些数据可以通过分析各了解地理模式并识别的风险因素。同时区域数据处理空间分区的汇总信息，重点关注区域间的空间关系和相互影响。
+
+**基本特征**：
+- 数据结构：多边形（或格网单元）+ 区域汇总值
+- 支持类型：通常是面支持（区域汇总统计）
+- 邻接关系：相邻区域通常表现出空间相关性
+- 分析重点：区域间的空间依赖和溢出效应
+
+**空间相关性**通过正相关（邻近区域值相似）或负相关（邻近区域值不同）表现，常用Moran's I、Geary's C等指标测量。
+
+**分析模型**包括：
+- 空间滞后模型（SAR）：$y = \rho Wy + X\beta + \varepsilon$
+- 空间误差模型（SEM）：$y = X\beta + u, u = \lambda Wu + \varepsilon$
+- 条件自回归模型（CAR）：基于条件分布的空间建模
+- 高斯马尔可夫随机场（GMRF）：基于图结构的空间建模
+
+**权重矩阵**定义空间邻接关系，包括基于共同边界的邻接矩阵、基于距离阈值的距离矩阵和基于最近邻居数量的k-近邻矩阵。
+
+**典型应用**：区域经济学的经济增长空间溢出、人口统计的社会经济指标空间分布、公共卫生的疾病发病率区域差异、政治地理的选举结果分析、城市规划的土地利用规划等。
+
+#### 苏格兰唇癌风险
+数据包含苏格兰各郡 1975 年至 1980 年间观察到和预期的唇癌病例数，以及一个表示从事农业、渔业或林业人口比例的变量（AFF）。AFF 变量与阳光曝露有关，这是唇癌的风险因素。数据中还包含苏格兰各郡的地图。
+```{r}
+data(scotland_sf,package = 'SpatialEpi')
+
+var_desc <- data.frame(
+  变量名 = names(scotland_sf),
+  描述 = c(
+    "每个县名称",
+    "每个县观察到的唇癌病例数",
+    "每个县预期的唇癌病例数",
+    "每个县从事农业、渔业或林业人口的比例",
+    "几何列"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+
+```{r}
+scotland_sf <- scotland_sf %>%
+  mutate(
+    x = st_coordinates(st_centroid(.))[,1],
+    y = st_coordinates(st_centroid(.))[,2]
+  ) %>%
+  filter(!is.na(cases), !is.na(AFF), !is.na(expected))
+
+coords <- st_coordinates(scotland_sf)
+initial_range <- diff(range(coords[, "X"])) / 3
+max_edge <- initial_range / 2
+
+mesh <- fm_mesh_2d_inla(scotland_sf,
+  max.edge=c(1, 2)* max_edge,
+  offset = c(initial_range, initial_range), 
+  cutoff=max_edge/7)
+plot(mesh)
+
+# 设置空间场的先验分布
+pc_prior_range <- c(0.5, 0.01) # P(range < 0.5) = 0.01
+pc_prior_sigma <- c(1, 0.01) # P(sigma > 1) = 0.01
+
+# 定义SPDE模型
+spde <- inla.spde2.pcmatern(
+  mesh,
+  prior.range = pc_prior_range,
+  prior.sigma = pc_prior_sigma
+)
+
+components <- cases ~ 
+  Intercept(1) + AFF + 
+  field(cbind(x, y), model = spde)
+
+scotland_inla <- bru(
+  components,
+  data = scotland_sf,
+  family = 'poisson',
+  E = scotland_sf$expected,
+  options = list(
+    control.inla = list(int.strategy = 'eb',reordering = "metis")
+  )
+)
+
+summary(scotland_inla)
+```
+
+截距: 均值为0.28，95%CI为(-0.184, 0.745)。AFF系数: 平均为3.13，95%CI为(0.607, 5.653)不包括0,这表明AFF与病例数呈显著正相关，exp(3.13) ≈ 22.8，意味着AFF每增加1个单位，期望病例数增加约22.8倍。空间随机效应：Range空间相关性的范围约93公里，表示这个距离内的地区在空间上相关。
+
+每个县的唇癌相对风险及其不确定性由后验均值和包含在对象 scotland_inla$summary.fitted.values 中的 95%CI给出。第 mean 列是后验均值， 0.025quant 和 0.975quant 分别是 2.5 和 97.5 百分位数，分别。
+```{r}
+predictions <- predict(scotland_inla, scotland_sf, ~ exp(Intercept + AFF + field))
+scotland_sf <- scotland_sf %>%
+  mutate(
+    RR = predictions$mean,
+    LL = predictions$q0.025,
+    UL = predictions$q0.975
+  )
+```
+
+### 点模式数据  (Point Pattern Data)
+
+在许多应用中，域 $D$ 是随机的－其索引集给出了空间点模式中随机事件的地点，而 $Z(s)$ 可能等于 $1 \; \forall s \in D$，表示事件的发生，或者随机地，提供一些额外的信息。当感分析的重点对应于事件的位置时，就会产生点点模式。例如，模式可能包括森林中火灾的位置或患有疾病的人的住宅地址。通常，我们将感兴趣的是理解产生点点模式的潜在空间过程，并评估空间模式是否表现出明显聚集性，集群或规律性。点模式数据关注事件发生的位置，位置本身包含重要信息。点的位置本身是随机变量，是我们要研究的对象。关注点的空间分布模式，点出现的位置具有随机性和不确定性。
+
+**基本特征**：
+- 核心要素：点位置 + 观测窗口
+- 关键特点：位置包含信息，观测窗口除点之外是"空的"
+- 数据结构：$(s_1, s_2, ..., s_n)$，其中$s_i$是事件位置
+
+**分析内容**包括强度分析（事件发生的密度和分布）、模式识别（聚集、随机、规则分布）和交互作用（不同类型事件间的相互影响）。
+
+**标记点模式**中，点可能具有额外属性信息，包括离散标记（如树种类型）和连续标记（如树木胸径）。
+
+**典型应用**：生态学的动植物分布研究、犯罪学的犯罪事件时空分布、流行病学的疾病病例空间聚集、商业分析的设施布局分析、地质学的矿物分布和地震震中分析等。多变量点模式分析法，共享一个空间分量，并且为每个点过程考虑一个特定的空间分量。以便将对照的空间变化作为病例空间变化的基线，以评估空间风险变化以及对不同潜在污染源的暴露情况。
+
+#### 数据
+数据集 chorley 提供了 1974 年至 1983 年间在英格兰兰开夏郡的卫生局记录的喉癌（58 例）和肺癌（978 例）新病例的确切居住地址。补充数据给出了一个废弃工业焚化炉的位置。数据以带标记的点模式表示，其中点表示每个个体的家庭地址的地理位置，标记则标识每个点是喉癌还是肺癌的病例。
+```{r}
+data(chorley,package = 'spatstat.data')
+
+# 将spatstat点模式对象转换为sf数据框
+chorley <- data.frame(
+  x = chorley$x,
+  y = chorley$y,
+  type = factor(chorley$marks)
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = 27700) 
+
+var_desc <- data.frame(
+  变量名 = names(chorley),
+  描述 = c(
+    "类型",
+    "位置"
+  )
+)
+
+chorley_extra <- data.frame(
+  x = chorley.extra$incin$x,
+  y = chorley.extra$incin$y
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = 27700)
+
+format_kable_table(var_desc)
+```
+
+显示了兰开夏郡的肺癌病例（蓝色）、喉癌病例（红色色）、废弃焚化炉的位置（红色三角。
+```{r}
+ggplot() +
+  geom_sf(data = chorley |> st_transform(crs=4326), 
+          aes(color = type), size = 2.2, alpha = 0.8) +
+  geom_sf(data = chorley_extra |> st_transform(crs=4326), 
+          color = '#d63031', size = 3.5, shape = 17) + 
+  scale_color_brewer(type = "qual", palette = "Set1") +
+  theme_classic() +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.position = "right"
+  )
+```
+
+#### 估计空间变化
+构建网格将是拟合SPDE模型的第一步，网格设计可以影响结果的计算，因此，必须遵循一些基本概念进行构建。首先，三角形的大小和形状应尽可能规则，以便在整个区域内保持恒定的估计。避免边界效应也很重要，方法是在距离研究区域边界一定距离处设置网格的外边界
+```{r}
+# 创建网格
+coords <- st_coordinates(chorley)
+initial_range <- diff(range(coords[, "X"])) / 3
+max_edge <- initial_range / 5
+
+mesh <- fm_mesh_2d(
+  loc = st_coordinates(chorley)[,1:2],
+  max.edge = c(1, 2) * max_edge,
+  cutoff = max_edge/10,
+  crs = st_crs(chorley)
+)
+
+# 查看网格点数量
+mesh$n
+
+ggplot() +
+  gg(data=mesh) 
+
+plot(mesh)
+plot(chorley["type"], add = TRUE, pch = 16)
+```
+
+定义了网格后，就应该构建基函数，以便使用SPDE方法估计空间效应。同时，将指定空间超参数（范围和名义标准差）的先验分布。在指定先验分布时，可以设置PC先验。参数`alpha = 2`用于在Matérn协方差的定义中将参数$\nu$设置为1（因为$\nu$等于`alpha`减去维度除以2）。
+
+```{r}
+prior_range <- initial_range
+prior_sigma <- 1  # 调整sigma先验
+
+spde <- inla.spde2.pcmatern(
+  mesh = mesh,
+  alpha = 2,
+  prior.range = c(prior_range, 0.8),  # 第二个参数是概率
+  prior.sigma = c(prior_sigma, 0.1)  # 第二个参数是概率
+)
+```
+
+定义了估计空间效应的设置，就可以定义模型组件以估计不同的强度。首先，定义单变量模型如下：
+
+$$
+\log(\lambda_{i}(x)) = \alpha_{i} + S_{i}(x); \forall i=0,1
+$$
+
+```{r}
+cmp <- geometry ~
+   Intercept(1) + spatialspde(geometry, model = spde)
+```
+
+左侧的`geometry`项表示点的空间坐标。模型的截距（$\alpha_{i}$）由`Intercept(1)`表示，然后空间效应（$S_{i}(x)$）由最后一个组件`spatialspde(geometry, model = spde)`表示，它接受两个参数：点的坐标（`geometry`）和SPDE模型的规范。
+
+尽管在前面的代码行中空间项被称为`spatialspde`，但这个特定名称不是强制的。可以使用任何名称，只要在整个代码中一致使用即可。然而，括号内的结构必须保持一致。第一个参数指定变化的空间场（是点模式的坐标），第二个参数`model`定义相关函数（是前面定义的SPDE模型）。
+
+可以使用inlabru包的`lgcp()`函数拟合模型，如下所示：
+
+```{r}
+fit.lun <- lgcp(
+  components = cmp,
+  data = chorley %>% filter(type=='lung'),
+  domain = list(geometry = mesh),
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = FALSE
+  )
+)
+```
+
+注意，此模型使用了肺癌病例位置的数据集`chorley %>% filter(type=='lung')`。可以通过相应地替换`data`参数的值，为喉癌病例拟合类似的模型。
+
+拟合模型后，可以显示强度的估计值。下图分别显示了估计的肺癌（左）强度的估计值（后验均值）。这些结果是通过分别对每组癌症病例进行单变量分析获得的。在比较估计值时需要考虑比例尺的差异，因为有58例喉癌病例和978例肺癌病例。
+
+```{r}
+where <- fm_pixels(mesh)
+lambda <- predict(fit.lun, where, ~ exp(Intercept + spatialspde))
+
+ggplot()+
+  geom_sf(data=lambda |> st_transform(crs=4326),aes(color=mean))
+```
+
+#### 比较病例和对照
+尽管单变量分析是一个合理的起点，但病例对照研究需要通过更复杂的方法进行更深入的分析。按照之前的研究，将肺癌病例视为对照组进行分析。首先，考虑一个仅包含在两组之间共享的空间项$S_{0}(x)$的基线模型，该模型将捕获两种点模式的强度的空间变化，如下所示：
+
+$$
+\log(\lambda_{0}(x)) = \alpha_{0} + S_{0}(x)
+$$
+
+$$
+\log(\lambda_{1}(x)) = \alpha_{1} + S_{0}(x) \quad \forall x \in D
+$$
+
+其中，$\lambda_{0}(x)$和$\lambda_{1}(x)$分别是对照组和病例组的强度。此外，$\alpha_{0}$和$\alpha_{1}$分别代表对照组和病例组的截距。
+
+接下来，将添加一个特定于病例的空间效应$S_{1}(x)$，这将导致一个具有两个似然的模型，每个点模式一个。注意，$S_{0}(x)$项将在两个似然之间共享。
+
+$$
+\log(\lambda_{0}(x)) = \alpha_{0} + S_{0}(x)
+$$
+
+$$
+\log(\lambda_{1}(x)) = \alpha_{1} + S_{0}(x) + S_{1}(x) \quad \forall x \in D
+$$
+
+这两个空间效应将使用与单变量模型中相同的网格和先验进行拟合，但每个空间项现在将估计不同的参数集。
+
+接下来，需要指定模型组件。在这种情况下，为每个点模式设置一个截距（分别命名为`Inter.con(1)`和`Inter.lar(1)`），并添加共享空间效应$S_{0}(x)$（作为组件`sharedspde`）。添加`-1`项是为了从模型中移除默认的截距。定义代码如下：
+
+```{r}
+cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
+  sharedspde(geometry, model = spde)
+```
+
+由于考虑了两个似然，因此使用`bru_obs`函数和上面定义的组件来指定它们，如下所示：
+
+```{r}
+# 对照组（肺癌）的观察模型
+con.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.con + sharedspde,
+  data = chorley |> filter(type=='lung'),
+  domain = list(geometry = mesh)
+)
+
+# 病例组（喉癌）的似然
+lar.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.lar + sharedspde,
+  data = chorley |> filter(type=='larynx'),
+  domain = list(geometry = mesh)
+)
+```
+
+这里，参数`family = "cp"`表明正在建立一个考克斯过程，然后指定每个观测模型的结构。定义了观测模型之后，可以使用`bru()`函数拟合模型：
+
+```{r}
+fit0 <- bru(
+  cmp,
+  con.lik,
+  lar.lik,
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = FALSE
+  ))
+```
+
+拟合模型后，可以展示和总结模型中的任何组件，例如强度或空间效应。要评估病例和对照强度之间的差异，模型将包括喉癌的特定空间效应$S_{1}(x)$。此外，空间效应$S_{1}(x)$将潜在地显示出高风险区域。
+
+组件和观测模型定义是唯一需要修改的地方，通过添加特定的空间项，该空间项在代码中被命名为`larspde`：
+
+```{r}
+cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
+  sharedspde(geometry, model = spde) +
+  larspde(geometry, model = spde)
+
+# 对照组（肺癌）的观察模型
+con.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.con + sharedspde,
+  data = chorley |> filter(type=='lung'),
+  domain = list(geometry = mesh)
+)
+
+# 病例组（喉癌）的似然
+lar.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.lar + sharedspde +larspde,
+  data = chorley |> filter(type=='larynx'),
+  domain = list(geometry = mesh)
+)
+
+fit1 <- bru(
+  cmp,
+  con.lik,
+  lar.lik,
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = FALSE
+  ))
+```
+
+注意，组件`larspde`是一个空间随机效应，其定义方式与另一个空间效应类似，但在定义病例观测模型的组件时需要包括在内。模型0仅包括共享空间效应，模型1包括共享和特定空间效应。利用下面的代码和已拟合的模型1，可以对喉癌病例特定空间效应的后验均值估计。
+
+```{r}
+where <- fm_pixels(mesh)
+#Estimate the intensity of the lung cancer cases
+lambda.con <- predict(fit1, where, ~exp(Inter.con + sharedspde))
+# Estimate the intensity of the larynx cancer cases
+lambda.lar <- predict(fit1, where, ~exp(Inter.lar + sharedspde + larspde))
+#Estimate the common spatial effect
+sp.eff.con <- predict(fit1, where, ~sharedspde)
+#Estimate the specific spatial effect
+sp.eff.lar <- predict(fit1, where, ~larspde)
+```
+
+从图中可以看出，共享空间效应存在很大的异质性，这可能主要是由于人口的城市集中。此外，与共享空间随机效应的规模相比，病例特定空间随机效应的规模非常小。这表明病例和对照之间具有相似的空间模式，这主要由共享空间效应捕获。此外，两个模型中共享空间随机效应的估计值非常相似。这也表明病例和对照之间具有非常相似的空间模式，因为包含病例特定空间随机效应并没有改变第二个模型中的共享效应。
+
+```{r}
+multiplot(
+  ggplot() + geom_sf(data=lambda.con |> st_transform(crs=4326),aes(color=mean)) + labs(title = "肺癌病例的强度") ,
+  ggplot() + geom_sf(data=lambda.lar |> st_transform(crs=4326),aes(color=mean)) + labs(title = "喉癌病例的强度"),
+  ggplot() + geom_sf(data=sp.eff.con |> st_transform(crs=4326),aes(color=mean)) + labs(title = "共享空间效应"),
+  ggplot() + geom_sf(data=sp.eff.lar |> st_transform(crs=4326),aes(color=mean)) + labs(title = "特定空间效应"),
+  cols=2)
+```
+
+#### 暴露于污染源
+
+Chorley数据集还包含一个废弃焚化炉的位置，可以分析该位置是否会影响病例的出现。因此，至少需要考虑焚化炉对病例强度分布的影响。一个简单的选择是计算焚化炉位置与每个网格点之间的距离，并将其作为典型的线性项包含在模型中。这将通过设置`model = "linear"`在组件中指定。
+
+```{r}
+# 将网格点转换为sf对象
+mesh_pts <- st_as_sf(
+  data.frame(x = mesh$loc[, 1], y = mesh$loc[, 2]),
+  coords = c("x", "y"),
+  crs = 27700
+)
+
+# 计算网格点到焚化炉的距离
+distances <- st_distance(mesh_pts, chorley_extra)[, 1]
+
+# 创建空间像素网格
+pix_cov_grid <- fm_pixels(mesh)
+pix_cov <- pix_cov_grid
+pix_cov$cov1 <- fm_evaluate(mesh, loc = pix_cov_grid, field = as.numeric(distances))
+
+# 定义协变量函数
+f_cov1 <- function(where) {
+  # 使用最近邻插值
+  nearest_indices <- st_nearest_feature(where, pix_cov)
+  v <- pix_cov$cov1[nearest_indices]
+  if (any(is.na(v))) {
+    v[is.na(v)] <- mean(pix_cov$cov1, na.rm = TRUE)
+  }
+  return(v)
+}
+
+# f_cov1(chorley[1:5, ])
+
+# 定义模型组件
+cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
+  sharedspde(geometry, model=spde) +
+  larspde(f_cov1(geometry), model = "linear")
+
+# 定义观测模型
+con.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.con + sharedspde,
+  data = chorley |> filter(type == 'lung'),
+  domain = list(geometry = mesh)
+)
+
+lar.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.lar + sharedspde + larspde,
+  data = chorley |> filter(type == 'larynx'),
+  domain = list(geometry = mesh)
+)
+
+# 拟合模型
+fit_exposure <- bru(cmp, con.lik, lar.lik,
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = F
+  )
+)
+
+summary(fit_exposure)
+```
+
+除了考虑距离焚化炉的线性项外，还可以基于距离包含其他非线性平滑项，使用一维SPDE或一维高斯过程（也可以使用SPDE方法进行估计）。接下来，将考虑一阶高斯过程和二阶随机游走。
+
+在这两种情况下，定义一维高斯过程需要一个一维网格，可以使用`fm_mesh_1d()`函数创建，如下所示：然后，将此网格传递给`inla.spde2.matern()`函数，以定义SPDE随机效应，用于定义模型中的一个组件，如下所示：
+
+```{r}
+cov_dist <- chorley |> filter(type == 'larynx') |> f_cov1()
+
+# 建立一维网格和一维SPDE效应
+mesh_cov <- fm_mesh_1d(
+  seq(0, round(max(cov_dist)), length = 20),
+  degree = 2,
+  boundary = c("free", "dirichlet")
+)
+
+# 创建一维SPDE基函数
+spde_cov <- inla.spde2.matern(
+  mesh = mesh_cov, 
+  alpha = 2, 
+  constr = TRUE
+)
+
+# # a Random Walk of order 2
+# spde_cov <- inla.spde2.pcmatern(
+#   mesh = mesh_cov, alpha=2,
+#   constr = FALSE,
+#   prior.range = c(10, NA),
+#   prior.sigma = c(1, 0.05))
+```
+
+```{r}
+cmp <- geometry ~ -1 + Inter.con(1) + Inter.lar(1) +
+  conSpde(geometry, model = spde) +
+  cov.lar(f_cov1(geometry), model = spde_cov)
+
+# 定义似然函数
+con.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.con + conSpde,
+  data = chorley |> filter(type == 'lung'),
+  domain = list(geometry = mesh)
+)
+
+lar.lik <- bru_obs(
+  family = "cp",
+  formula = geometry ~ Inter.lar + conSpde + cov.lar,
+  data = chorley |> filter(type == 'larynx'),
+  domain = list(geometry = mesh)
+)
+
+# 步骤6：拟合模型
+fit_1d_spde <- bru(cmp, con.lik, lar.lik,
+  options = list(
+    control.inla = list(
+      reordering = "metis",
+      int.strategy = "eb"
+    ),
+    verbose = F
+  )
+)
+summary(fit_1d_spde)
+brinla::bri.hyperpar.summary(fit_1d_spde)
+```
+
+注意，这里将先验设置为使范围小于空间SPDE随机效应的范围，以假设效应是局部化的，并且标准差设置得略大一些，以允许更大的局部变化。
+
+最后，可以通过将范围设置为较大的固定值来近似二阶随机游走，如中的结果所示。在下面的代码中，先验的第二个参数设置为`NA`，使其固定为第一个参数的值。注意，在两个模型中都添加了总和为零的约束。这是为了帮助识别这些暴露效应，因为可能存在与空间效应的混杂。
+如上所述，当暴露效应被视为典型的线性效应时，`model`参数的值为"linear"。然而，当效应被明确定义时，保存效应的对象必须分配给`model`参数。在我们的例子中，我们将效应的定义保存在`spde_cov`中，因此我们指定了`model = spde_cov`。
+
+无论随机效应的结构如何，通过在定义组件时设置`model`参数，将该效应引入线性预测器。然后，可以将此组件定义传递给定义不同似然和拟合所需模型的函数。图显示了根据距离焚化炉的距离估计的喉癌病例强度的影响。
+
+报告说，在焚化炉附近病例显著增加。这种效应在图中线性模型的系数的负趋势中被清楚地捕捉到，以及在随机游走平滑项中显示的非线性效应中。SPDE模型似乎没有如此清楚地捕捉到这种效应。结果通过宽的可行区间显示了对这种效应的高度不确定性。
+
+### 地理统计数据/点参考数据  (Point Referenced Data / Geostatistical Data)
+
+在地统计学数据中，$D$ 是 $\mathbb{R}^d$ 的一个连续的固定子集，空间索引 $s$ 在空间中连续变化，因此 $Z(s)$ 可以在 $D$ 的任何地方观察到。通常，使用在已知空间位置 $\{Z(s_1), \ldots, Z(s_n)\}$ 观察到的数据 $\{s_1, \ldots, s_n\}$ 来预测感兴趣变量在未来样本位置上的值。例如，我们可以使用多个监测站的空气污染测量值来预测其他位置的空气污染，同时考虑空间自相关和其他已知可以预测感兴趣结果的因素。地统计数据的特点是在有限样本位置观测连续变化现象，目标是预测未观测位置的值。点的位置是预先确定的（采样点、监测站等）,研究焦点: 关注点上测量值的空间变化,每个点都有一个或多个测量值。
+
+**基本特征**：
+- 观测特点：感兴趣变量在样本位置被测量
+- 缺失性质：其他位置变量值存在但未观测
+- 分析目标：估计未观测位置的值（空间插值）
+- 信息焦点：主要关注测量值而非采样位置
+
+**基本假设**包括空间连续性（变量在空间上连续分布）、空间相关性（邻近位置值相互关联）和平稳性（空间统计特征在区域内相对稳定）。
+
+**分析方法**包括变异函数建模（描述空间相关结构）、Kriging插值（最优线性无偏预测）、协Kriging（利用辅助变量提高预测精度）和贝叶斯方法（结合先验信息的空间预测）。
+
+**典型应用**：环境监测的空气质量和土壤污染分布、气象学的温度和降雨空间分布、地质勘探的矿物品位分析、农业的土壤肥力评估、水文学的地下水位和水质参数分析等。
+
+#### 数据
+数据集 rongelap 记录了 157 个测量点的伽马射线强度，即在时间间隔 time （秒）内放射的粒子数目 counts（个），测量点的横纵坐标分别为 cX （米）和 cY（米）。
+```{r}
+rongelap <- readRDS(file = "data/rongelap.rds") |> 
+  st_as_sf(coords=c('cX','cY'), dim = "XY")
+rongelap_coastline <- readRDS(file = "data/rongelap_coastline.rds") |> 
+  st_as_sf(coords=c('cX','cY'), dim = "XY")
+
+
+ggplot() +
+  geom_sf(data=rongelap,aes(color = counts / time), size = 0.5) +
+  geom_sf(data = rongelap_coastline) +
+  theme_bw() +
+  scale_x_continuous(n.breaks = 7) +
+  scale_color_viridis_c(option = "C") +
+  coord_sf() + 
+  labs(
+    x = "横坐标（米）", 
+    y = "纵坐标（米）",
+    color = "辐射强度"
+  )
+```
+
+空间广义线性混合效应模型
+```{r}
+boundary <- rongelap %>%
+  st_union() %>%      
+  st_convex_hull()  
+
+coords <- st_coordinates(boundary)[, 1:2]
+x_range <- diff(range(coords[, "X"]))
+y_range <- diff(range(coords[, "Y"]))
+max_range <- max(x_range, y_range)
+max_edge <- max_range / 20 
+offset <- max_range / 10     
+mesh <- inla.mesh.2d(
+  loc = coords,
+  max.edge = c(max_edge, max_edge * 2),
+  offset = c(offset, offset * 2),
+  cutoff = max_edge / 2
+)
+plot(mesh)
+mesh$n
+
+spde <- inla.spde2.pcmatern(
+  mesh,
+  prior.sigma = c(1, 0.01),    # P(sigma > 1) = 0.01
+  prior.range = c(max_range/5, 0.05),  # P(range < max_range/5) = 0.05
+  alpha = 3/2  # alpha = nu + d/2，对于 nu=0.5, d=2，所以 alpha=1.5
+)
+
+# 定义模型组件
+cmp <- counts ~ 
+  Intercept(1) +
+  spatial(geometry, model = spde) + 
+  offset_term(log(time))
+
+# # 检查数据分布（均值和方差）
+mean_counts <- mean(rongelap$counts)
+var_counts <- var(rongelap$counts)
+# 如果方差远大于均值，考虑负二项分布
+fit_rongelap_bru <- bru(
+  cmp,
+  family = "nbinomial",
+  data = rongelap,
+  E = rongelap$time
+)
+
+summary(fit_rongelap_bru)
+bri.hyperpar.summary(fit_rongelap_bru)
+```
+
+空间范围表示空间相关性的距离尺度，均值约为4014.32，说明空间效应在这一距离内显著相关。offset系数显著95%CI包括0，不显著。
+
+以海岸线为边界生成规则网格，首先连接点 POINT 构造多边形 POLYGON 对象。POINT 和 POLYGON 是 sf 包内建的基础的几何类型，其它复杂的空间类型是由它们衍生而来。函数 st_geometry 提取空间点数据中的几何元素，再用函数 st_combine 将点组合起来，最后用函数 st_cast 转换成 POLYGON 多边形类型。为了确保覆盖整个岛，处理好边界问题，需要一点缓冲空间，就是说在给定的边界线外围再延伸一段距离，构造一个更大的多边形，这可以用函数 st_buffer() 实现。
+```{r}
+# 将海岸线转换为多边形
+rongelap_coastline_sfp <- rongelap_coastline %>%
+  st_combine() %>%
+  st_cast("POLYGON")
+# 创建50米缓冲区
+rongelap_coastline_buffer <- rongelap_coastline_sfp %>%
+  st_buffer(dist = 50) %>%
+  st_as_sf()
+# 在缓冲区内创建网格
+rongelap_grid <- rongelap_coastline_buffer %>%
+  st_make_grid(n = c(150, 75)) %>%
+  st_as_sf() %>%
+  # 只保留与缓冲区相交的网格
+  filter(st_intersects(., rongelap_coastline_buffer, sparse = FALSE)[,1])
+# 计算网格中心点坐标
+rongelap_grid_centroid <- rongelap_grid %>%
+  st_centroid() |> 
+  st_set_geometry("geometry")
+
+ggplot() +
+  geom_sf(data = rongelap_coastline_sfp, 
+          fill = NA, color = "gray30", linewidth = 0.5) +
+  geom_sf(data = rongelap_grid, fill = NA, color = "gray30") +
+  theme_void()
+```
+
+利用函数 st_make_grid() 根据朗格拉普岛海岸缓冲线构造网格，朗格拉普岛是狭长的，因此，网格是 
+ 的，意味着水平方向 75 行，垂直方向 150 列。创建预测数据框
+
+```{r}
+rongelap_pred_data <- rongelap_grid_centroid %>%
+  mutate(time = 1) 
+```
+
+使用模型进行预测
+```{r}
+pred_rongelap <- predict(
+  fit_rongelap_bru,
+  newdata = rongelap_pred_data,
+  ~ exp(Intercept + spatial + offset_term * log(time)),  # 线性预测子的指数变换
+  n.samples = 1000  # 贝叶斯预测样本数
+)
+
+# 将预测结果添加到网格数据
+rongelap_pred_data$pred_mean <- pred_rongelap$mean
+rongelap_pred_data$pred_sd <- pred_rongelap$sd
+rongelap_pred_data$pred_q025 <- pred_rongelap$q0.025
+rongelap_pred_data$pred_q975 <- pred_rongelap$q0.975
+
+# 预测均值图
+p1 <- ggplot() +
+  geom_sf(data=rongelap_pred_data,aes(color = pred_mean)) +
+  scale_color_viridis_c(option = "C", breaks = 0:12,
+  guide = guide_colourbar(
+      barwidth = 1, barheight = 5
+  ))+
+  theme_void() 
+
+# 预测不确定性图
+p2 <- ggplot() +
+  geom_sf(data=rongelap_pred_data,aes(color = pred_sd)) +
+  scale_color_viridis_c(option = "C", breaks = 0:12,
+  guide = guide_colourbar(
+      barwidth = 1, barheight = 5
+  ))+
+  theme_void() 
+
+# 高风险区域识别
+# 定义高风险阈值（例如95分位数）
+high_risk_threshold <- quantile(rongelap_pred_data$pred_mean, 0.95)
+rongelap_pred_data$high_risk <- rongelap_pred_data$pred_mean > high_risk_threshold
+# 高风险区域可视化
+p3 <- ggplot() +
+  geom_sf(data=rongelap_pred_data,aes(color = high_risk)) +
+  labs(title = paste0("高风险区域识别 (阈值: ", round(high_risk_threshold, 2), ")")) +
+  theme_void() 
+
+(p1+p2)/p3
+```

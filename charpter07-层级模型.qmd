@@ -1,0 +1,290 @@
+# 层次模型 
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+贝叶斯层次模型（Hierarchical Models）和多层模型（Multilevel Models）确实在本质上描述了相同的统计建模框架。这两种模型处理具有嵌套或分组结构的数据，其中参数通过层次结构传递影响。这种建模方法基于条件概率理论，特别是贝叶斯定理的应用，可以表述为：
+
+$$P(\theta|y) \propto P(y|\theta)P(\theta)$$
+
+在层次模型中，先验分布$P(\theta)$本身由超参数$\phi$参数化，形成了参数的层次结构。这种"参数的参数"结构使模型能够同时捕获组内变异和组间变异。
+
+从理论上讲，层次模型具有以下核心特性：
+
+1. **部分池化效应**：参数估计介于完全池化（忽略组结构）和无池化（每组独立估计）之间，实现了偏差-方差权衡的优化
+2. **借力效应**：数据稀疏组从数据丰富组"借用"信息
+3. **收缩效应**：个体估计向群体均值收缩，程度取决于组内变异相对于组间变异的比例
+
+## 数学描述
+
+以学生成绩与复习时间的例子为例，可以构建如下层次模型：
+
+### 模型规范
+
+设$y_{ij}$是第$j$所学校中第$i$个学生的考试得分，$x_{ij}$是该学生的复习时间。两级层次模型可以表示为：
+
+**Level 1 (个体学生层面):**
+$$y_{ij} = \beta_{0j} + \beta_{1j}x_{ij} + \epsilon_{ij}$$
+
+**Level 2 (学校层面):**
+$$\beta_{0j} = \gamma_{00} + \gamma_{01}w_j + u_{0j}$$
+$$\beta_{1j} = \gamma_{10} + \gamma_{11}w_j + u_{1j}$$
+
+其中：
+- $\epsilon_{ij} \sim N(0, \sigma^2)$ 表示个体水平的随机误差
+- $u_{0j} \sim N(0, \tau_0^2)$ 和 $u_{1j} \sim N(0, \tau_1^2)$ 表示学校水平的随机效应
+- $w_j$ 是学校层面的协变量（如学校规模、资源等）
+- $\gamma_{00}$ 是总体截距
+- $\gamma_{10}$ 是复习时间的总体效应
+- $\gamma_{01}$, $\gamma_{11}$ 是学校特征对截距和斜率的影响
+
+### 贝叶斯表示法
+
+从贝叶斯角度，同样的模型可以表示为一系列条件分布：
+
+$$y_{ij} | \beta_{0j}, \beta_{1j}, \sigma^2 \sim N(\beta_{0j} + \beta_{1j}x_{ij}, \sigma^2)$$
+
+$$\begin{pmatrix} \beta_{0j} \\ \beta_{1j} \end{pmatrix} | \mu_{\beta}, \Sigma_{\beta} \sim N\left(\begin{pmatrix} \gamma_{00} + \gamma_{01}w_j \\ \gamma_{10} + \gamma_{11}w_j \end{pmatrix}, \begin{pmatrix} \tau_0^2 & \rho\tau_0\tau_1 \\ \rho\tau_0\tau_1 & \tau_1^2 \end{pmatrix}\right)$$
+
+其中$\rho$是学校层级截距和斜率的相关系数，$\Sigma_{\beta}$是学校随机效应的协方差矩阵。
+
+超参数$\gamma_{00}, \gamma_{01}, \gamma_{10}, \gamma_{11}, \sigma^2, \tau_0^2, \tau_1^2, \rho$还需要设定先验分布，如：
+
+$$\gamma_{00}, \gamma_{01}, \gamma_{10}, \gamma_{11} \sim N(0, 100)$$
+$$\sigma^2 \sim \text{Inv-Gamma}(0.001, 0.001)$$
+$$\tau_0^2, \tau_1^2 \sim \text{Inv-Gamma}(0.001, 0.001)$$
+$$\rho \sim \text{Uniform}(-1, 1)$$
+
+### 综合模型表示
+
+将两级方程代入可得综合形式：
+
+$$y_{ij} = \gamma_{00} + \gamma_{01}w_j + \gamma_{10}x_{ij} + \gamma_{11}w_jx_{ij} + u_{0j} + u_{1j}x_{ij} + \epsilon_{ij}$$
+
+此表达式清晰展示了固定效应（$\gamma$参数）和随机效应（$u$项）的区别，以及层级结构如何使变量在不同层级上交互。
+
+## 统计推断
+
+在贝叶斯框架下，对此类模型的参数进行推断需要计算后验分布：
+
+$$P(\gamma, \tau^2, \sigma^2 | y) \propto P(y | \gamma, \tau^2, \sigma^2) P(\gamma, \tau^2, \sigma^2)$$
+
+由于模型复杂性，通常采用马尔可夫链蒙特卡洛（MCMC）方法如Gibbs抽样或Hamiltonian Monte Carlo进行后验分布的数值近似。
+
+此类模型允许研究人员不仅评估复习时间对考试成绩的一般影响，还能评估这种影响在不同学校间的变异性，并探索学校特征如何调节这种关系，从而获得比传统回归模型更丰富、更细致的解释框架。
+
+## 比例的层次模型
+
+### 数据
+DeathHeartAttackManhattan数据集是纽约市13家医院的心脏病病例数和死亡人数。
+```{r}
+data(DeathHeartAttackManhattan,package = 'ProbBayes')
+
+var_desc <- data.frame(
+  变量名 = names(DeathHeartAttackManhattan),
+  描述 = c(
+    "医院名称",
+    "类型",
+    "病例数",
+    "死亡数"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+响应变量为死亡数，试验数为Cases，假设每家医院的死亡率围绕全局平均值随机变化，Hospital作为随机效应。该模型是一个二级结构，观察嵌套在医院中。
+```{r}
+formula <- Deaths ~ 1 + f(Hospital, model = "iid")
+# 拟合INLA模型
+dham_inla <- inla(formula = formula,  family = "binomial",
+  data = DeathHeartAttackManhattan,  Ntrials = Cases,
+  control.predictor = list(compute = TRUE),
+  control.compute = list(return.marginals = TRUE, dic = TRUE, waic = TRUE)
+)
+summary(dham_inla)
+```
+
+随机效应的精度：19990.23 (精度=方差的倒数)非常高,表明医院间死亡率变异性极低。有效参数数量：1.01，接近1表明几乎没有医院随机效应，模型等同于仅有截距的简单模型，几乎所有医院的心脏病死亡率都接近6.87%。
+
+### brms
+
+使用PC先验约束了组间方差的估计，使模型在数据有限情况下更为稳健。
+```{r}
+dham_brms <- brm(
+  data = DeathHeartAttackManhattan, 
+  family = binomial,  Deaths | trials(Cases) ~ 1 + (1 | Hospital),
+  # 使用PC先验
+  prior = c(
+    # PC先验语法：student_t(df, 0, scale) 其中scale是u参数
+    prior(student_t(3, 0, 0.3), class = "sd", group = "Hospital"),
+    prior(normal(0, 10), class = "Intercept")
+  ),
+  chains = 4,  iter = 2000,  warmup = 1000,
+  cores = 4,  seed = 123,  refresh = 0,silent=TRUE)
+summary(dham_brms)
+
+posterior_df <- as_draws_df(dham_brms)
+# 创建一个包含所有后验样本的长格式数据框
+post <- posterior_df %>%
+  as_tibble() %>%
+  select(starts_with("r_Hospital"), .chain, .iteration, .draw) %>%
+  pivot_longer(cols = starts_with("r_Hospital"),names_to = "Hospital",             values_to = "Effect")
+```
+
+该模型基于13家医院的数据，使用logit链接函数建模死亡概率。模型包含一个总体截距项（-2.61，95%CI：-2.81到-2.42）和医院层面的随机效应，医院间变异的标准差为0.16（95%CI：0.01到0.42）。所有参数的Rhat值均为1.00，表明MCMC链收敛良好。总体截距为负值说明死亡率相对较低，而较小的医院间变异（sd=0.16）表明不同医院的死亡率相对一致，医院间差异不大。
+
+## 均值的层次模型
+
+### 数据
+
+```{r}
+data(jsp, package = "faraway")
+
+mjspr  <- jsp %>% 
+  filter(year == 2) %>%
+  select(school, class, id, gender, raven, social, english, math) %>%
+  # 将english和math转为长格式
+  pivot_longer(
+    cols = c(english, math),
+    names_to = "subject",
+    values_to = "raw_score"
+  ) %>%
+  # 根据科目调整原始分数
+  mutate(
+    # 英语除以100，数学除以40
+    score = case_when(
+      subject == "english" ~ raw_score / 100,
+      subject == "math" ~ raw_score / 40
+    ),
+    # 中心化raven变量
+    craven = raven - mean(raven)
+  ) %>%
+  # 不再需要的原始分数列
+  select(-raw_score) %>%
+  mutate(
+    school = factor(school),  # 将学校转换为因子变量
+    classch = factor(paste(school, class, sep = "_")),  # 创建学校_班级的组合因子
+    classchid = factor(paste(school, class, id, sep = "_"))  # 创建学校_班级_ID的组合因子
+  )
+
+var_desc <- data.frame(
+  变量名 = names(mjspr),
+  描述 = c(
+    "学校",
+    "班级",
+    "个体编号",
+    "性别",
+    "认知能力测试得分",
+    "社交能力测试得分",
+    "科目",
+    "分数",
+    "认知能力测试得分中心化",
+    "学校班级的组合ID",
+    "学校班级个体的组合ID"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+模型包含三个层级的嵌套结构（学校、班级、学生），用于分析不同层级因素对学生成绩的影响固定效应：subject*gender: 科目与性别的交互效应，包含主效应（subject、gender）和它们的交互效应
+craven*subject。认知能力与科目的交互效应，也包含各自的主效应。social: 社交因素的主效应。f(school, model = "iid"): 将学校作为独立同分布(iid)随机效应。f(classch, model = "iid"): 将学校-班级组合作为iid随机效应。f(classchid, model = "iid"): 将学校-班级-学号组合作为iid随机效应
+```{r}
+formula <- score ~ subject * gender + craven * subject + social +
+    f(school, model = "iid") +  f(classch, model = "iid") + 
+    f(classchid, model = "iid")
+mjspr_inla <- inla(formula, family = "gaussian", data = mjspr)
+summary(mjspr_inla)
+```
+
+固定效应结果：数学科目成绩显著更高（0.367），女生总体表现略好（0.064），但数学科目存在性别差异（交互项-0.059），Craven量表正向影响成绩（0.017），社会经济地位较高组（social4-7）成绩相对较低。INLA输出精度参数而非标准差：观测值精度为73.64（对应残差标准差约0.12），个体间精度96.94（标准差约0.10），学校间精度444.96（标准差约0.05），班级精度18284.65（标准差约0.007）。班级层面的精度估计不确定性较大，可能反映该层级效应较弱。边际对数似然值为794.77，可用于模型比较。
+
+#### brms实现
+随机效应:(1|school): 学校层级的随机截距，表示不同学校间的变异。(1|school:class): 学校内班级的随机截距，表示嵌套在学校内的班级间变异。(1|school:class:id): 个体学生层级的随机截距，表示嵌套在班级内的学生个体间变异。
+```{r}
+formula <- score ~ subject * gender + craven * subject + social +
+    (1 | school) +    (1 | school:class) +    (1 | school:class:id)
+mjspr_brms <- brm(formula, data = mjspr, iter = 10000, cores = 4,
+                  refresh = 0,silent=TRUE)
+summary(mjspr_brms)
+```
+
+模型显示数学科目相比其他科目有显著更高的成绩（系数0.37），女生总体表现略好于男生（系数0.06），但在数学科目上存在性别差异，女生数学成绩相对较低（交互项-0.06）。Craven量表（可能衡量学习动机或能力）与成绩正相关（0.02），但在数学科目中效应略有减弱。社会经济地位变量显示，较高社会阶层（social4-7）的学生成绩相对较低，这可能反映了某种选择偏差或测量问题。随机效应显示个体间差异最大（sd=0.10），学校间差异较小（sd=0.05），班级内差异最小（sd=0.02）。
+
+## 纵向数据
+
+数据来自lme4包，sleepstudy记录了睡眠剥夺研究中受试者每日平均反应时间的数据集，在第 0 天，受试者有正常的睡眠量。此后每晚被限制睡眠3小时。响应变量Reaction表示一系列测试中每天每个受试者平均反应时间（毫秒）。
+
+### 数据
+```{r}
+data(sleepstudy,package = "lme4")
+
+#反应时间通过除以1000，使得INLA估计稳定
+sleepstudy |> 
+  mutate(Reaction=Reaction/1000) -> sleepstudy
+
+var_desc <- data.frame(
+  变量名 = names(sleepstudy),
+  描述 = c(
+    "平均反应时间",
+    "睡眠剥夺的天数",
+    "观测的受试者编号"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### INLA实现
+为每个受试者添加随机截距，假设这些随机效应相互独立且同分布(iid)，每个受试者的截距不是独立估计的，而是"借力"于群体分布。
+```{r}
+sleeps_inla <- inla(Reaction ~ 1+ Days+f(Subject,model='iid'),data = sleepstudy)
+summary(sleeps_inla)
+```
+
+Days效应: 平均值为0.010，表示随着每增加一天的睡眠剥夺，反应时间平均增加0.010个单位，95%CI为[0.009, 0.012]。CI不包含0，说明睡眠剥夺确实导致反应时间延长。观测精度高，表示模型残差的变异程度很小。受试者精度高，表示不同受试者间基线反应时间的变异程度不大。受试者精度的CI较宽，反映了对该参数估计的不确定性较大。
+
+每个受试者添加随机截距和随机斜率，增加了每个受试者自己特定的对时间的反应模式。不仅截距，斜率也来自群体分布，且允许截距与斜率之间的相关性。
+```{r}
+sleeps_inla2 <- inla(Reaction ~ 1+ Days+f(Subject,Days,model='iid'),data = sleepstudy)
+summary(sleeps_inla2)
+```
+
+固定效应的Days效应与上个模型类似，受试者精度比上个模型大幅增加。受试者之间存在明显差异，不仅基线水平不同，对睡眠剥夺的敏感度也不同。
+
+### BRMS实现
+拟合随机截距模型
+```{r}
+priors <- c(
+  prior(normal(250, 100), class = "Intercept"),
+  prior(normal(10, 10), class = "b", coef = "Days"),
+  prior(cauchy(0, 25), class = "sd"),
+  prior(cauchy(0, 25), class = "sigma")
+)
+
+sleep_brms <- brm(
+  formula = Reaction ~ 1 + Days + (1 | Subject),
+  data = sleepstudy,  family = gaussian(),  prior = priors,
+  chains = 4,  iter = 2000,  warmup = 1000,  seed = 123,refresh = 0,silent=TRUE,
+  control = list(adapt_delta = 0.95)
+)
+summary(sleep_brms)
+```
+
+于18名受试者10天的观测数据（共180个观测值）。模型显示睡眠剥夺每增加一天，反应时间平均增加0.01个单位，证实了睡眠不足对认知表现的累积性负面影响。受试者间基线反应时间存在适度个体差异（随机截距标准差=0.04），模型整体拟合良好（残差标准差=0.03）。
+
+拟合随机截距和随机斜率模型
+```{r}
+sleep_brms2 <- brm(
+  formula = Reaction ~ 1 + Days + (1 + Days | Subject),
+  data = sleepstudy,  family = gaussian(),  prior = priors,
+  chains = 4,  iter = 2000,  warmup = 1000,  seed = 123,refresh = 0,silent=TRUE,
+  control = list(adapt_delta = 0.95)
+)
+summary(sleep_brms2)
+```
+
+该模型允许睡眠剥夺效应在个体间变化。模型显示，睡眠剥夺每增加一天反应时间增加0.01个单位，但个体间存在显著的基线差异（随机截距标准差=0.03）和睡眠剥夺敏感性差异（随机斜率标准差=0.01）。个体的基线反应时间与睡眠剥夺敏感性呈弱正相关（相关系数=0.08，95%CI: -0.50到0.67），但不确定性较大。相比简单模型，该模型更真实地反映了个体对睡眠剥夺反应的异质性。

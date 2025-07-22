@@ -1,0 +1,17 @@
+
+model {
+  # 似然函数 - 线性回归
+  for (i in 1:n) {
+    y[i] ~ dnorm(mu[i], tau)  # 正态分布
+    mu[i] <- beta0 + beta1 * x[i]  # 线性关系
+  }
+  
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)      # 截距的正态先验
+  beta1 ~ dnorm(0, 0.001)      # 斜率的正态先验
+  tau ~ dgamma(0.001, 0.001)   # 精度参数的伽马先验
+  
+  # 计算标准差（可选，用于解释）
+  sigma <- 1/sqrt(tau)
+}
+

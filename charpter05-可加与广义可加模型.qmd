@@ -1,0 +1,293 @@
+# 可加与广义可加模型
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+广义加性模型估计每个预测变量效应的贡献，方法包括样条、局部回归、多项式回归等。GAM 轻松捕捉非线性关系，无需对个别变量进行手动转换。GAM的加性特性使得能够细致地考察每个预测变量对响应的影响，同时保持其他变量不变。与传统的样条模型不同，GAMs 免去了我们关于结点放置、数量和基函数的难题。GAMs 的主要局限在于它们的加性本质，可能忽略了变量之间的重要交互。
+贝叶斯广义加性模型(Bayesian Generalized Additive Models, BAGMs)是广义加性模型(GAMs)在贝叶斯统计框架下的扩展。GAMs将广义线性模型推广为包含非参数平滑函数的形式。BAGMs 进一步将贝叶斯推断应用于这些模型，为参数和平滑函数提供完整的后验分布。
+
+## 广义加性模型基础
+
+广义加性模型通过使用平滑函数 $f_j$ 来建模预测变量 $X_j$ 与响应变量 $Y$ 之间的非线性关系。GAM的核心思想在于将多个预测变量的效应以加性方式组合，而非传统的线性组合方式。这种加性结构保留了模型的可解释性，同时允许捕捉复杂的非线性关系。
+
+### 贝叶斯框架下的平滑先验
+
+贝叶斯方法为平滑函数施加先验分布，通常使用高斯过程或惩罚样条的形式。这些先验能够控制函数的平滑度，防止过拟合。通过马尔科夫链蒙特卡洛(MCMC)或变分贝叶斯(VB)方法，可以获得参数和平滑函数的完整后验分布，而非仅仅是点估计。
+
+### 模型形式
+
+假设响应变量 $Y$ 服从指数族分布，其期望 $\mathbb{E}(Y)=\mu$ 通过链接函数 $g(\cdot)$ 与预测变量相关。贝叶斯广义加性模型可表示为：
+
+$$
+g(\mu_i) = \beta_0 + \sum_{j=1}^{p} f_j(x_{ij})
+$$
+
+其中：
+- $\mu_i = \mathbb{E}(Y_i)$ 是第 $i$ 个观测的响应变量期望
+- $\beta_0$ 是截距项
+- $f_j$ 是应用于预测变量 $x_{ij}$ 的平滑函数
+- $p$ 是预测变量的数量
+
+### 平滑函数表示
+
+平滑函数 $f_j$ 通常表示为基函数的加权和：
+
+$$
+f_j(x) = \sum_{k=1}^{K_j} \beta_{jk} B_{jk}(x)
+$$
+
+其中：
+- $B_{jk}$ 是第 $j$ 个变量的第 $k$ 个基函数
+- $\beta_{jk}$ 是对应的系数
+- $K_j$ 是用于表示函数 $f_j$ 的基函数数量
+
+### 先验规范
+
+在贝叶斯框架下，对平滑函数的系数施加先验分布：
+
+$$
+\boldsymbol{\beta}_j \sim \mathcal{N}(\mathbf{0}, \tau_j^{-1}\mathbf{S}_j^{-})
+$$
+
+其中：
+- $\boldsymbol{\beta}_j = (\beta_{j1}, \ldots, \beta_{jK_j})^T$ 是系数向量
+- $\mathbf{S}_j$ 是平滑惩罚矩阵，通常是基函数的二阶或三阶导数的内积
+- $\tau_j$ 是平滑参数，控制函数 $f_j$ 的平滑程度
+- $\mathbf{S}_j^{-}$ 表示 $\mathbf{S}_j$ 的广义逆矩阵
+
+对平滑参数 $\tau_j$ 本身，通常施加伽马先验：
+
+$$
+\tau_j \sim \text{Gamma}(a_j, b_j)
+$$
+
+### 后验推断
+
+模型参数的联合后验分布为：
+
+$$
+p(\beta_0, \{\boldsymbol{\beta}_j\}_{j=1}^p, \{\tau_j\}_{j=1}^p | \mathbf{y}) \propto p(\mathbf{y}|\beta_0, \{\boldsymbol{\beta}_j\}_{j=1}^p) \prod_{j=1}^p p(\boldsymbol{\beta}_j|\tau_j)p(\tau_j)
+$$
+
+后验分布通过MCMC方法如Gibbs抽样或Hamiltonian Monte Carlo进行采样，或通过变分贝叶斯方法进行近似。
+
+## 计算实现
+
+实际计算中，平滑函数通常使用以下几种方法表示：
+
+### 样条基函数
+
+B-样条是最常用的基函数之一：
+
+$$
+f_j(x) = \sum_{k=1}^{K_j} \beta_{jk} B_{jk}(x, \text{度数}, \text{结点})
+$$
+
+其中结点的选择可以是均匀的，也可以基于分位数。
+
+### 高斯过程
+
+高斯过程提供了另一种表示平滑函数的方式：
+
+$$
+f_j \sim \mathcal{GP}(0, k_j(x, x'))
+$$
+
+其中 $k_j$ 是协方差函数，如平方指数核：
+
+$$
+k_j(x, x') = \sigma_j^2 \exp\left(-\frac{(x-x')^2}{2l_j^2}\right)
+$$
+
+$\sigma_j^2$ 和 $l_j$ 是需要估计的超参数。
+
+## 模型评估与选择
+
+在贝叶斯框架下，模型选择可以通过以下方式进行：
+
+1. 偏差信息准则(DIC)：
+   $$\text{DIC} = D(\bar{\theta}) + 2p_D$$
+ 
+2. 广泛适用的信息准则(WAIC)：
+   $$\text{WAIC} = -2\sum_{i=1}^n \log\left(\frac{1}{S}\sum_{s=1}^S p(y_i|\theta^{(s)})\right) + 2p_{\text{WAIC}}$$
+
+3. 留一交叉验证(LOO)：
+   $$\text{LOO} = \sum_{i=1}^n \log p(y_i|y_{-i})$$
+
+其中 $p(y_i|y_{-i})$ 表示在不包含第 $i$ 个观测的数据条件下，第 $i$ 个观测的后验预测密度。
+
+贝叶斯框架的优势在于能够合理地量化参数不确定性，并通过后验预测检验评估模型的预测性能，同时避免了经典GAM中平滑参数选择的困难。
+
+## 数据
+Wage数据集是一个包含有关个体工资的信息的数据集，包含 3000 个观测样本，每个样本包括年份、年龄、女因状况、种族、教育程度、地区、职业类别、健康状况、健康保险情况以及工资等信息。
+```{r}
+data(Wage,package = "ISLR")
+
+var_desc <- data.frame(
+  变量名 = names(Wage),
+  描述 = c(
+    "年份",
+    "年龄",
+    "婚姻状况",
+    "种族",
+    "教育程度",
+    "地区",
+    "职业类别",
+    "健康状况",
+    "医疗保险",
+    "log转换的工资",
+    "工资"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+## inla实现
+本例age和year均使用rw2（二阶随机游走）适合平滑连续趋势。iid（独立同分布）模型适合无明显结构的效应。
+```{r}
+wage_inla <- inla(wage ~ education + f(age, model = "rw2",scale.model = TRUE) + f(year, model = "rw2",scale.model = TRUE),
+           family = "gaussian", data = Wage,
+           control.compute = list(dic = T, waic = T))
+summary(wage_inla)
+```
+
+工资首先随着“年龄”增加，然后在大约 60 岁后减少。对于变量“年份”，工资倾向于增加，看起来在大约 2007 年或 2008 年左右薪资有所下降。对于分类变量“教育”，薪资也呈单调增加。变量“年龄”和“年份”的曲线形状曲折，这是由于平滑样条模型了数据中的非线性关系。
+
+使用 GAMs 拟合逻辑回归模型来预测二元响应值的概率。
+```{r}
+Wage$high_wage <- as.numeric(Wage$wage > 250)
+logit_inla <- inla(high_wage ~ education + 
+                   f(age, model = "rw2", scale.model = TRUE) + 
+                   f(year, model = "rw2", scale.model = TRUE),
+                   family = "binomial", data = Wage,
+                   control.compute = list(dic = TRUE, waic = TRUE))
+summary(logit_inla)
+# 可视化平滑效应
+# 提取年龄效应
+age_effects <- data.frame(
+  age = logit_inla$summary.random$age$ID,
+  mean = logit_inla$summary.random$age$mean,
+  lower = logit_inla$summary.random$age$`0.025quant`,
+  upper = logit_inla$summary.random$age$`0.975quant`
+)
+# 提取年份效应
+year_effects <- data.frame(
+  year = logit_inla$summary.random$year$ID,
+  mean = logit_inla$summary.random$year$mean,
+  lower = logit_inla$summary.random$year$`0.025quant`,
+  upper = logit_inla$summary.random$year$`0.975quant`
+)
+
+# 年龄效应图
+ggplot(age_effects, aes(x = age, y = mean)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+  theme_minimal() +
+  labs(title = "年龄对高工资概率的平滑效应", 
+       x = "年龄", 
+       y = "效应估计(对数比值)")
+# 年份效应图
+ggplot(year_effects, aes(x = year, y = mean)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+  theme_minimal() +
+  labs(title = "年份对高工资概率的平滑效应", 
+       x = "年份", 
+       y = "效应估计(对数比值)")
+
+#模型在变量'year'上是线性的
+logit_inla2 <- inla(high_wage ~ education + year +
+                   f(age, model = "rw2", scale.model = TRUE),
+                   family = "binomial", data = Wage,
+                   control.compute = list(dic = TRUE, waic = TRUE))
+summary(logit_inla2)
+```
+
+WAIC (Widely Applicable Information Criterion) 是一种模型选择指标，可以看作是AIC的贝叶斯版本。WAIC值越小，表示模型拟合越好,year的非线性模型要好于线性模型。
+
+```{r}
+logit_inla$waic$waic
+logit_inla2$waic$waic
+```
+
+## brms实现
+brms使用s()平滑函数，借助mgcv包的支持提供GAM。
+```{r}
+formula <- wage ~ s(age, k = 6) + s(year, k = 6) + education
+wage_brms <- brm(formula,  data = Wage,  family = gaussian(),
+  chains = 4,  iter = 2000,  warmup = 1000,  cores = 4,  
+  control = list(adapt_delta = 0.9),refresh = 0,silent=TRUE)
+summary(wage_brms)
+```
+
+模型基于3000个工资观测数据，揭示了教育水平对收入的显著阶梯效应：从高中毕业到高等学位，工资增幅从10,930递增至62,570，呈现明显的教育回报递增模式。模型通过平滑样条函数捕捉年龄和年份的非线性效应，其中年龄效应较为复杂（平滑度参数47.63），而时间趋势相对平缓（平滑度参数6.47），所有参数均显示良好的MCMC收敛性（Rhat=1.00），为理解工资决定因素提供了可靠的统计推断。
+
+使用brms进行建模时，需要注意s()函数默认使用的基函数数量(k)大于数据中变量的唯一值数量
+```{r}
+Wage$high_wage <- as.numeric(Wage$wage > 250)
+
+# 检查年份变量中唯一值的数量
+n_unique_years <- length(unique(Wage$year))
+
+# 检查年龄变量中唯一值的数量
+n_unique_ages <- length(unique(Wage$age))
+
+# 使用brms拟合逻辑回归模型，使用平滑项
+logit_brms <- brm(formula = high_wage ~ education + 
+            s(age, k = min(n_unique_ages - 1, 10)) + 
+            s(year, k = min(n_unique_years - 1, 5)),
+  family = bernoulli(),  data = Wage, chains = 4,  iter = 2000,  warmup = 1000,
+  cores = 4,  control = list(adapt_delta = 0.95),  seed = 123,refresh = 0,silent=TRUE)
+
+summary(logit_brms)
+
+# 可视化平滑效应
+# 年龄效应
+plot_age <- conditional_effects(logit_brms, effects = "age", method = "posterior_epred")
+plot(plot_age)
+
+# 年份效应
+plot_year <- conditional_effects(logit_brms, effects = "year", method = "posterior_epred")
+plot(plot_year)
+
+# 提取后验样本
+posterior_samples <- posterior_samples(logit_brms)
+
+# 预测不同年龄的效应
+new_data_age <- data.frame(
+  age = seq(min(Wage$age), max(Wage$age), length.out = 100),
+  year = mean(Wage$year),
+  education = "1. < HS Grad"  # 选择一个参考教育水平
+)
+
+age_predictions <- fitted(
+  logit_brms, 
+  newdata = new_data_age,
+  scale = "response",  # 返回概率而非对数比值
+  summary = FALSE      # 返回完整后验样本
+)
+
+# 计算预测的均值和95%CI
+age_summary <- data.frame(
+  age = new_data_age$age,
+  mean = apply(age_predictions, 2, mean),
+  lower = apply(age_predictions, 2, quantile, probs = 0.025),
+  upper = apply(age_predictions, 2, quantile, probs = 0.975)
+)
+
+# 绘制年龄效应图
+ggplot(age_summary, aes(x = age, y = mean)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+  theme_minimal() +
+  labs(title = "年龄对高工资概率的平滑效应",
+       x = "年龄",
+       y = "高工资概率",
+       subtitle = "基于brms模型，展示后验均值和95%CI")
+```
+
+模型显示教育水平对高工资概率有显著正向影响，从高中毕业到高等学位的logit系数从32.63递增至35.74，但所有教育系数的标准误都很大（37.92），且截距异常大（-38.16），表明模型可能存在数值不稳定或完全分离问题。年龄和年份的平滑样条效应相对较小且不显著，而教育相关参数的有效样本量较低（约370），提示模型在这些参数上的收敛质量不佳，需要进一步的模型诊断和可能的重新规范化。

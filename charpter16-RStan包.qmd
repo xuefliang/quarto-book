@@ -1,0 +1,917 @@
+# RStan 包
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(rstan)
+library(posterior)
+library(bayesplot)
+```
+RStan 接口（rstan 包）采用的是内存中的 Stan 接口架构，它深度依赖于 R 的 C++ 集成机制。具体而言，RStan 通过 Rcpp 和 inline 等 R 包，实现了从 R 环境直接调用 C++ 代码的功能，这种设计使得 Stan 模型的编译和执行都在 R 的内存空间中完成。RStan 作为 Stan 生态系统中的经典接口，在某些应用场景下仍然具有不可替代的优势。首先，RStan 为 R 包开发者提供了强大的分发能力，允许开发人员在 CRAN 平台上分发包含预编译 Stan 程序的 R 包。例如，广受欢迎的 rstanarm 包就是基于这种机制开发的，用户可以直接安装使用，无需额外的编译配置。
+
+其次，RStan 采用了传统的 R 对象系统，避免了 R6 类的使用，这为许多习惯传统 R 编程范式的用户提供了更加熟悉的语法结构。这种设计降低了学习成本，特别是对于那些不熟悉面向对象编程概念的统计学家和数据分析师而言。
+
+## 安装
+rstan安装仍需要配置 C++工具链，配置方法见上一章节。完成后可以使用如下方式安装rstan
+```{r}
+#| eval: false
+#| echo: true
+install.packages("rstan", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
+```
+
+将上述cmdstanr实现改为rstan实现：
+
+## 数据集
+还是使用第二章中 STATA 格式的 coronary.dta 数据集。
+```{r}
+coronary <- read_dta("data/coronary.dta") |> 
+  as_factor()
+```
+
+## 单变量贝叶斯线性回归
+建立胆固醇水平与舒张压之间的线性关系模型。RStan采用类似的Stan语法，但在模型编译和拟合方式上有所不同，提供了R语言环境下更直接的接口。
+
+```{r}
+# 定义Stan模型
+stan_model_code <- "
+data {
+  int<lower=0> n;          // 样本数量
+  vector[n] y;             // 因变量：胆固醇
+  vector[n] x;             // 自变量：舒张压
+}
+
+parameters {
+  real beta0;              // 截距
+  real beta1;              // 回归系数
+  real<lower=0> sigma;     // 误差标准差
+}
+
+model {
+  // 先验分布
+  beta0 ~ normal(0, 10);   // 截距的弱信息先验
+  beta1 ~ normal(0, 10);   // 系数的弱信息先验
+  sigma ~ exponential(1);   // 标准差的指数先验
+
+  // 似然函数
+  y ~ normal(beta0 + beta1 * x, sigma);
+}
+
+generated quantities {
+  vector[n] y_rep;         // 后验预测样本
+  vector[n] log_lik;       // 对数似然（用于模型比较）
+
+  for (i in 1:n) {
+    y_rep[i] = normal_rng(beta0 + beta1 * x[i], sigma);
+    log_lik[i] = normal_lpdf(y[i] | beta0 + beta1 * x[i], sigma);
+  }
+}
+"
+
+# 编译模型
+model_simple <- stan_model(model_code = stan_model_code)
+
+# 准备数据
+stan_data_simple <- list(
+  n = nrow(coronary),
+  y = coronary$chol,
+  x = coronary$dbp
+)
+
+# 拟合模型
+fit_simple <- sampling(
+  object = model_simple,
+  data = stan_data_simple,
+  chains = 4,              # 4条MCMC链
+  cores = 4,               # 并行采样核心数
+  warmup = 1000,           # 预热迭代次数
+  iter = 3000,             # 总迭代次数（包含预热）
+  seed = 123,
+  refresh = 0              # 不显示采样进度
+)
+```
+
+## 后验分析与诊断
+使用rstan内置函数和bayesplot包进行后验分布的汇总和分析，提供了与cmdstanr类似的现代化可视化功能。
+
+```{r}
+# 后验汇总统计
+posterior_summary <- summary(fit_simple, pars = c("beta0", "beta1", "sigma"))
+print(posterior_summary$summary)
+
+# 提取后验样本用于可视化
+posterior_samples <- extract(fit_simple, permuted = FALSE)
+
+# MCMC诊断 - 轨迹图
+mcmc_trace(posterior_samples, pars = c("beta0", "beta1", "sigma")) +
+  theme_minimal() +
+  labs(title = "MCMC轨迹图")
+
+# 后验密度图
+mcmc_dens_overlay(posterior_samples, pars = c("beta0", "beta1", "sigma")) +
+  theme_minimal() +
+  labs(title = "后验密度图")
+
+posterior_draws <- as_draws_array(fit_simple)
+posterior_subset <- subset_draws(posterior_draws, 
+                                variable = c("beta0", "beta1", "sigma"))
+# 计算R-hat和有效样本量
+rhats <- summarise_draws(posterior_subset, "rhat")$rhat
+
+# R-hat收敛诊断
+mcmc_rhat(rhats) +
+  theme_minimal() +
+  labs(title = "R-hat收敛诊断")
+
+# 有效样本量诊断
+mcmc_neff(neff_ratio(fit_simple, pars = c("beta0", "beta1", "sigma"))) +
+  theme_minimal() +
+  labs(title = "有效样本量比例")
+```
+
+贝叶斯线性回归的后验推断结果显示，截距参数beta0的后验均值为2.979（95%CI：1.975-3.965），回归系数beta1的后验均值为0.039（95%CI：0.027-0.051），表明舒张压与胆固醇水平之间存在显著的正相关关系，舒张压每增加1个单位，胆固醇水平平均增加0.039个单位；模型的残差标准差sigma为1.078（95%CI：0.977-1.198），反映了模型无法解释的随机变异程度；所有参数的Rhat值均接近1.00且有效样本量都超过2500，表明MCMC采样收敛良好，后验推断结果可靠。
+
+RStan与CmdStanR的主要差异体现在几个方面：**模型编译方式**：RStan使用`stan_model()`函数直接从字符串编译模型，而CmdStanR需要先写入文件再编译。这使得RStan在交互式分析中更加便捷。**采样接口**：RStan的`sampling()`函数使用不同的参数名称，如`warmup`代替`iter_warmup`，`iter`表示总迭代次数而非仅采样次数，`cores`代替`parallel_chains`。**结果提取**：RStan使用`extract()`函数提取后验样本，返回的数据结构与CmdStanR的`draws()`方法略有不同，但都能与bayesplot包良好配合。**内置功能**：RStan提供了更多内置的汇总和诊断函数，如`summary()`、`rhat()`、`neff_ratio()`等，减少了对额外包的依赖。
+
+## 多变量贝叶斯线性回归
+
+在贝叶斯框架下，多变量回归不仅能提供参数的点估计，还能量化参数估计的不确定性，这在实际应用中具有重要价值。在多变量贝叶斯线性回归中，研究者需要处理设计矩阵和多个回归系数。通过矩阵运算可以提高计算效率，同时确保模型的数值稳定性。为了改善MCMC采样的收敛性，通常需要对数值变量进行标准化处理。
+
+```{r}
+# 多变量回归Stan模型
+stan_model_multi <- "
+data {
+  int<lower=0> n;          // 样本数量
+  int<lower=0> p;          // 预测变量数量
+  matrix[n, p] X;          // 设计矩阵
+  vector[n] y;             // 因变量
+}
+
+parameters {
+  real beta0;              // 截距
+  vector[p] beta;          // 回归系数向量
+  real<lower=0> sigma;     // 误差标准差
+}
+
+model {
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta ~ normal(0, 10);
+  sigma ~ exponential(1);
+
+  // 似然函数
+  y ~ normal(beta0 + X * beta, sigma);
+}
+
+generated quantities {
+  vector[n] y_rep;
+  vector[n] log_lik;
+  real r_squared;          // 决定系数
+
+  {
+    vector[n] mu = beta0 + X * beta;
+    real ss_res = 0;
+    real ss_tot = 0;
+    real y_mean = mean(y);
+  
+    for (i in 1:n) {
+      y_rep[i] = normal_rng(mu[i], sigma);
+      log_lik[i] = normal_lpdf(y[i] | mu[i], sigma);
+      ss_res += square(y[i] - mu[i]);
+      ss_tot += square(y[i] - y_mean);
+    }
+  
+    r_squared = 1 - ss_res / ss_tot;
+  }
+}
+"
+
+# 编译多变量模型（使用rstan）
+model_multi <- stan_model(model_code = stan_model_multi)
+
+# 准备多变量数据
+X_matrix <- as.matrix(coronary[, c("dbp", "bmi", "age")])
+# 标准化数值变量以改善收敛性
+X_matrix[, 1:2] <- scale(X_matrix[, 1:2])
+
+stan_data_multi <- list(
+  n = nrow(coronary),
+  p = ncol(X_matrix),
+  X = X_matrix,
+  y = coronary$chol
+)
+
+# 拟合多变量模型
+fit_multi <- sampling(
+  model_multi,  data = stan_data_multi,  chains = 4,
+  iter = 3000,  warmup = 1000,  cores = 4,
+  seed = 123,  control = list(adapt_delta = 0.95),refresh = 0 
+)
+```
+
+### 后验分析与模型诊断
+
+够评估模型的拟合质量和参数估计的可靠性。
+
+```{r}
+# 提取后验样本
+posterior_samples <- extract(fit_multi)
+
+# 后验汇总统计
+summary(fit_multi, pars = c("beta0", "beta", "sigma", "r_squared"))$summary
+
+# 将样本转换为bayesplot兼容格式
+posterior_array <- as.array(fit_multi)
+
+# MCMC轨迹图
+mcmc_trace(posterior_array, pars = c("beta0", "beta[1]", "beta[2]", "beta[3]", "sigma")) +
+  theme_minimal() +
+  labs(title = "MCMC轨迹图 - 多变量回归参数",
+       subtitle = "检查链的混合和收敛性") +
+  theme(legend.position = "bottom")
+```
+
+### 后验分布可视化与收敛诊断
+
+通过密度图可以观察参数的后验分布形状，判断是否存在多峰性或其他异常情况。同时，收敛诊断指标（如R-hat统计量）能够量化评估MCMC采样的质量。
+
+```{r}
+# 后验密度图
+mcmc_dens_overlay(posterior_array, pars = c("beta0", "beta[1]", "beta[2]", "beta[3]", "sigma")) +
+  theme_minimal() +
+  labs(title = "后验密度分布图",
+       subtitle = "不同链的密度重叠展示") +
+  theme(legend.position = "bottom")
+
+# R-hat收敛诊断
+posterior_draws <- as_draws_array(fit_multi)
+posterior_subset <- subset_draws(posterior_draws, 
+                                variable = c("beta0", "beta[1]", "beta[2]", "beta[3]", "sigma"))
+# 计算R-hat和有效样本量
+rhats <- summarise_draws(posterior_subset, "rhat")$rhat
+neffs <- summarise_draws(posterior_subset, "ess_bulk")$ess_bulk / (4 * 2000)  # 标准化为比率
+
+mcmc_rhat(rhats) +
+  theme_minimal() +
+  labs(title = "R-hat收敛诊断",
+       subtitle = "R-hat值应接近1.00表示收敛良好",
+       x = "R-hat值") +
+  geom_vline(xintercept = 1.1, color = "red", linetype = "dashed", alpha = 0.7)
+
+# 有效样本量诊断
+mcmc_neff(neffs, size = 2) +
+  theme_minimal() +
+  labs(title = "有效样本量比率",
+       subtitle = "比率应大于0.1表示采样效率良好",
+       x = "有效样本量比率") +
+  geom_vline(xintercept = 0.1, color = "red", linetype = "dashed", alpha = 0.7)
+```
+
+通过后验分布的分析，研究者可以获得各个回归系数的CI，从而判断预测变量的显著性和影响方向。在多变量模型中，需要特别注意变量间的共线性问题，以及标准化对系数解释的影响。
+
+```{r}
+# 后验区间图
+mcmc_intervals(posterior_array, pars = c("beta0", "beta[1]", "beta[2]", "beta[3]", "sigma")) +
+  theme_minimal() +
+  labs(title = "参数后验CI",
+       subtitle = "50%和95%CI，beta0:截距, beta[1]:dbp, beta[2]:bmi, beta[3]:age")
+```
+
+通过以上分析，研究者不仅获得了各个预测变量对胆固醇水平影响的定量估计，还能够评估这些估计的不确定性。这种完整的不确定性量化是贝叶斯方法相比频率学方法的重要优势，为决策提供了更丰富的信息基础。
+
+模型拟合度评估
+通过R平方值和残差分析，研究者可以评估模型对数据的拟合程度，以及是否存在系统性的拟合偏差。
+
+```{r}
+# R平方的后验分布
+mcmc_areas(posterior_array, pars = "r_squared", prob = 0.95) +
+  theme_minimal() +
+  labs(title = "决定系数(R²)的后验分布",
+       subtitle = "模型解释变异的比例")
+# 提取R平方的后验统计
+r_squared_summary <- summary(fit_multi, pars = "r_squared")$summary
+cat("模型决定系数 R² 的后验统计:\n")
+cat("均值:", round(r_squared_summary["mean"], 3), "\n")
+cat("95%CI: [", round(r_squared_summary["2.5%"], 3), ", ", 
+    round(r_squared_summary["97.5%"], 3), "]\n")
+# 预测值与观测值的关系
+fitted_values <- apply(extract(fit_multi, pars = "y_rep")$y_rep, 2, mean)
+residuals <- coronary$chol - fitted_values
+# 残差图
+plot(fitted_values, residuals, 
+     xlab = "拟合值", ylab = "残差", 
+     main = "残差与拟合值散点图",
+     pch = 16, alpha = 0.6)
+abline(h = 0, col = "red", lty = 2)
+# 正态Q-Q图检验残差分布
+qqnorm(residuals, main = "残差正态Q-Q图")
+qqline(residuals, col = "red")
+```
+
+该模型显示出良好的收敛性和统计显著性。模型截距（beta0）的后验均值为4.40，95%CI为[3.37, 5.42]，表明在所有预测变量为零时胆固醇的基线水平。三个预测变量中，dbp（beta[1] = 0.39，95%CI: [0.23, 0.55]）和age（beta[3] = 0.038，95%CI: [0.017, 0.059]）对胆固醇水平呈显著正向影响，而bmi（beta[2] = -0.090，95%CI: [-0.24, 0.060]）的影响不显著，因为其95%CI包含零。模型的决定系数R²为0.22（95%CI: [0.19, 0.23]），说明这三个变量能够解释胆固醇变异的约22%。所有参数的R-hat值均接近1.00且有效样本量充足（n_eff > 3000），表明MCMC采样收敛良好，结果可靠。总体而言，舒张压是胆固醇水平最重要的预测因子，年龄也有显著但较小的正向作用，而BMI在控制其他变量后对胆固醇的影响并不明显。
+
+
+## 其他常见概率分布的贝叶斯建模实现
+
+## 伯努利分布
+
+伯努利分布是处理二分类结果变量的基础分布，在疾病诊断、治疗效果评估等医学场景中应用广泛。通过logit链接函数，研究者可以将协变量的线性组合转换为概率尺度，实现对二分类结果的精确建模。
+
+```{r}
+#| echo: true
+#| eval: false
+# 逻辑回归：预测是否患有冠心病
+model_bernoulli <- "
+data {
+  int<lower=0> n;
+  array[n] int<lower=0,upper=1> y;  // 二分类结果变量
+  vector[n] age;
+  vector[n] cholesterol;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+}
+
+transformed parameters {
+  vector[n] p;
+  for (i in 1:n) {
+    p[i] = inv_logit(beta0 + beta1 * age[i] + beta2 * cholesterol[i]);
+  }
+}
+
+model {
+  // 似然函数：伯努利分布
+  for (i in 1:n) {
+    y[i] ~ bernoulli_logit(beta0 + beta1 * age[i] + beta2 * cholesterol[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 2);
+  beta1 ~ normal(0, 1);
+  beta2 ~ normal(0, 1);
+}
+
+generated quantities {
+  array[n] int y_rep;
+  for (i in 1:n) {
+    y_rep[i] = bernoulli_logit_rng(beta0 + beta1 * age[i] + beta2 * cholesterol[i]);
+  }
+}
+"
+
+# 示例数据
+set.seed(123)
+n <- 50
+age <- rnorm(n, 55, 10)
+cholesterol <- rnorm(n, 200, 30)
+y <- rbinom(n, 1, plogis(-5 + 0.05 * age + 0.02 * cholesterol))
+
+stan_data_bern <- list(
+  y = y,
+  age = age,
+  cholesterol = cholesterol,
+  n = n
+)
+
+# 拟合模型
+fit_bernoulli <- stan(model_code = model_bernoulli, 
+                      data = stan_data_bern,
+                      chains = 4, iter = 2000)
+
+# 模型诊断
+mcmc_trace(fit_bernoulli, pars = c("beta0", "beta1", "beta2"))
+mcmc_pairs(fit_bernoulli, pars = c("beta0", "beta1", "beta2"))
+
+# 后验预测检查
+y_rep <- extract(fit_bernoulli, "y_rep")$y_rep
+ppc_bars(y, y_rep[1:100, ])
+```
+
+## 泊松分布 - 计数数据的回归建模
+
+泊松分布专门用于建模计数型数据，如疾病发生次数、事件频率等。通过对数链接函数确保预测的计数值始终为非负数，这在流行病学研究中具有重要的实际意义。对于过度离散的计数数据，还可以考虑使用负二项分布进行建模。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测每月心脏病发作次数
+model_poisson <- "
+data {
+  int<lower=0> n;
+  array[n] int<lower=0> y;  // 计数数据
+  vector[n] pollution;
+  vector[n] temperature;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+}
+
+transformed parameters {
+  vector[n] lambda;
+  for (i in 1:n) {
+    lambda[i] = exp(beta0 + beta1 * pollution[i] + beta2 * temperature[i]);
+  }
+}
+
+model {
+  // 似然函数：泊松分布
+  for (i in 1:n) {
+    y[i] ~ poisson_log(beta0 + beta1 * pollution[i] + beta2 * temperature[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 2);
+  beta1 ~ normal(0, 1);
+  beta2 ~ normal(0, 1);
+}
+
+generated quantities {
+  array[n] int y_rep;
+  for (i in 1:n) {
+    y_rep[i] = poisson_log_rng(beta0 + beta1 * pollution[i] + beta2 * temperature[i]);
+  }
+}
+"
+
+# 示例数据
+set.seed(123)
+n <- 50
+pollution <- runif(n, 10, 50)
+temperature <- runif(n, 15, 35)
+y <- rpois(n, exp(0.5 + 0.02 * pollution + 0.03 * temperature))
+
+stan_data_pois <- list(
+  y = y,
+  pollution = pollution,
+  temperature = temperature,
+  n = n
+)
+
+# 拟合模型
+fit_poisson <- stan(model_code = model_poisson, 
+                    data = stan_data_pois,
+                    chains = 4, iter = 2000)
+
+# 模型诊断和可视化
+mcmc_areas(fit_poisson, pars = c("beta0", "beta1", "beta2"))
+y_rep <- extract(fit_poisson, "y_rep")$y_rep
+ppc_hist(y, y_rep[1:8, ], binwidth = 1)
+```
+
+## 二项分布 - 成功率建模与试验设计
+
+二项分布扩展了伯努利分布的概念，适用于固定试验次数下的成功次数建模。在临床试验中，这种分布常用于分析不同条件下的治疗成功率，为医疗决策提供统计学依据。相比伯努利分布，二项分布能够更好地利用总试验次数的信息。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测治疗成功率
+model_binomial <- "
+data {
+  int<lower=0> n;
+  array[n] int<lower=0> success;  // 成功次数
+  array[n] int<lower=0> trials;   // 总试验次数
+  vector[n] dose;
+  vector[n] age;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+}
+
+transformed parameters {
+  vector[n] p;
+  for (i in 1:n) {
+    p[i] = inv_logit(beta0 + beta1 * dose[i] + beta2 * age[i]);
+  }
+}
+
+model {
+  // 似然函数：二项分布
+  for (i in 1:n) {
+    success[i] ~ binomial_logit(trials[i], beta0 + beta1 * dose[i] + beta2 * age[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 2);
+  beta1 ~ normal(0, 1);
+  beta2 ~ normal(0, 1);
+}
+
+generated quantities {
+  array[n] int success_rep;
+  for (i in 1:n) {
+    success_rep[i] = binomial_rng(trials[i], p[i]);
+  }
+}
+"
+
+# 示例数据
+set.seed(123)
+n <- 30
+trials <- sample(10:25, n, replace = TRUE)
+dose <- runif(n, 5, 30)
+age <- rnorm(n, 60, 15)
+p_true <- plogis(-1 + 0.1 * dose - 0.02 * age)
+success <- rbinom(n, trials, p_true)
+
+stan_data_bin <- list(
+  success = success,
+  trials = trials,
+  dose = dose,
+  age = age,
+  n = n
+)
+
+# 拟合模型
+fit_binomial <- stan(model_code = model_binomial, 
+                     data = stan_data_bin,
+                     chains = 4, iter = 2000)
+
+# 后验分析
+mcmc_intervals(fit_binomial, pars = c("beta0", "beta1", "beta2"))
+success_rep <- extract(fit_binomial, "success_rep")$success_rep
+ppc_scatter_avg(success, success_rep)
+```
+
+## Gamma分布 - 正值连续变量的建模
+
+Gamma分布特别适合建模严格为正值的连续变量，如住院时间、康复期长度、生存时间等。其形状参数和速率参数的灵活组合能够描述各种右偏分布形态，在医学统计中应用广泛。通过重新参数化，研究者可以直接建模均值和形状，使参数解释更加直观。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测住院时间（只能为正值）
+model_gamma <- "
+data {
+  int<lower=0> n;
+  vector<lower=0>[n] y;  // 正连续变量
+  vector[n] severity;
+  vector[n] comorbidity;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+  real<lower=0> shape;
+}
+
+transformed parameters {
+  vector<lower=0>[n] mu;
+  vector<lower=0>[n] rate;
+
+  for (i in 1:n) {
+    mu[i] = exp(beta0 + beta1 * severity[i] + beta2 * comorbidity[i]);
+    rate[i] = shape / mu[i];
+  }
+}
+
+model {
+  // 似然函数：Gamma分布
+  for (i in 1:n) {
+    y[i] ~ gamma(shape, rate[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(1, 1);
+  beta1 ~ normal(0, 1);
+  beta2 ~ normal(0, 1);
+  shape ~ gamma(2, 0.5);
+}
+
+generated quantities {
+  vector[n] y_rep;
+  for (i in 1:n) {
+    y_rep[i] = gamma_rng(shape, rate[i]);
+  }
+}
+"
+
+# 示例数据
+set.seed(123)
+n <- 40
+severity <- sample(1:5, n, replace = TRUE)
+comorbidity <- sample(0:3, n, replace = TRUE)
+mu_true <- exp(1.5 + 0.3 * severity + 0.2 * comorbidity)
+y <- rgamma(n, shape = 2, rate = 2/mu_true)
+
+stan_data_gamma <- list(
+  y = y,
+  severity = severity,
+  comorbidity = comorbidity,
+  n = n
+)
+
+# 拟合模型
+fit_gamma <- stan(model_code = model_gamma, 
+                  data = stan_data_gamma,
+                  chains = 4, iter = 2000)
+
+# 模型诊断
+mcmc_rhat(rhat(fit_gamma))
+y_rep <- extract(fit_gamma, "y_rep")$y_rep
+ppc_dens_overlay(y, y_rep[1:50, ])
+```
+
+## Beta分布 - 比例数据的精确建模
+
+Beta分布是处理[0,1]区间内比例数据的理想选择，如治疗依从性、疾病控制率、生存概率等指标。通过均值和精度的重新参数化，可以更直观地解释回归系数对比例均值的影响效应。Beta分布的灵活性使其能够建模各种形状的分布，从U形到钟形分布。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测治疗依从性比例
+model_beta <- "
+data {
+  int<lower=0> n;
+  vector<lower=0,upper=1>[n] y;  // 比例数据
+  vector[n] education;
+  vector[n] support;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+  real<lower=0> phi;  // 精度参数
+}
+
+transformed parameters {
+  vector<lower=0,upper=1>[n] mu;
+  vector<lower=0>[n] alpha;
+  vector<lower=0>[n] beta_param;
+
+  for (i in 1:n) {
+    mu[i] = inv_logit(beta0 + beta1 * education[i] + beta2 * support[i]);
+    alpha[i] = mu[i] * phi;
+    beta_param[i] = (1 - mu[i]) * phi;
+  }
+}
+
+model {
+  // 似然函数：Beta分布
+  for (i in 1:n) {
+    y[i] ~ beta(alpha[i], beta_param[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 2);
+  beta1 ~ normal(0, 1);
+  beta2 ~ normal(0, 1);
+  phi ~ gamma(2, 0.1);
+}
+
+generated quantities {
+  vector[n] y_rep;
+  for (i in 1:n) {
+    y_rep[i] = beta_rng(alpha[i], beta_param[i]);
+  }
+}
+"
+
+# 示例数据
+set.seed(123)
+n <- 35
+education <- rnorm(n, 14, 3)
+support <- sample(1:5, n, replace = TRUE)
+mu_true <- plogis(-1 + 0.1 * education + 0.3 * support)
+y <- rbeta(n, mu_true * 10, (1 - mu_true) * 10)
+
+stan_data_beta <- list(
+  y = y,
+  education = education,
+  support = support,
+  n = n
+)
+
+# 拟合模型
+fit_beta <- stan(model_code = model_beta, 
+                 data = stan_data_beta,
+                 chains = 4, iter = 2000)
+
+# 后验可视化
+mcmc_areas_ridges(fit_beta, pars = c("beta0", "beta1", "beta2", "phi"))
+y_rep <- extract(fit_beta, "y_rep")$y_rep
+ppc_intervals(y, y_rep, x = education)
+```
+
+### 多项分布 
+多项分布处理具有多个互斥类别的结果变量，在疾病分级、治疗方案选择等多分类问题中发挥重要作用。通过softmax变换确保所有类别概率之和为1，同时允许协变量对不同类别概率产生差异化影响。在医学研究中，这种建模方法特别适用于疾病严重程度分级、治疗反应类型分类等场景。多项逻辑回归的核心思想是将线性预测器通过softmax函数转换为概率，其中一个类别作为参考类别固定为0。这种参数化方式不仅确保了模型的可识别性，还使得回归系数具有明确的解释意义：表示相对于参考类别的对数几率比变化。
+```{r}
+#| echo: true
+#| eval: false
+# 预测疾病的多种分类结果
+model_multinomial <- "
+data {
+  int<lower=2> K;  // 类别数
+  int<lower=0> n;
+  array[n] int<lower=0> y;  // 类别标签（1到K）
+  vector[n] age;
+  vector[n] severity_score;
+}
+
+parameters {
+  vector[K-1] beta0;  // 截距（参考类别除外）
+  vector[K-1] beta1;  // 年龄效应
+  vector[K-1] beta2;  // 严重程度评分效应
+}
+
+transformed parameters {
+  array[n] simplex[K] theta;
+
+  for (i in 1:n) {
+    vector[K] alpha;
+    alpha[K] = 0;  // 参考类别（重度）
+  
+    for (k in 1:(K-1)) {
+      alpha[k] = beta0[k] + beta1[k] * age[i] + beta2[k] * severity_score[i];
+    }
+  
+    theta[i] = softmax(alpha);
+  }
+}
+
+model {
+  // 似然函数：分类分布（多项分布的单次试验版本）
+  for (i in 1:n) {
+    y[i] ~ categorical(theta[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 2);
+  beta1 ~ normal(0, 1);
+  beta2 ~ normal(0, 1);
+}
+
+generated quantities {
+  array[n] int y_rep;
+  vector[n] log_lik;
+  
+  for (i in 1:n) {
+    y_rep[i] = categorical_rng(theta[i]);
+    log_lik[i] = categorical_lpmf(y[i] | theta[i]);
+  }
+  
+  // 计算每个类别的边际概率
+  vector[K] prob_marginal = rep_vector(0, K);
+  for (i in 1:n) {
+    for (k in 1:K) {
+      prob_marginal[k] += theta[i][k];
+    }
+  }
+  prob_marginal = prob_marginal / n;
+}
+"
+
+# 生成示例数据（3个类别：轻度=1、中度=2、重度=3）
+set.seed(123)
+n <- 100
+age <- rnorm(n, 55, 15)
+severity_score <- runif(n, 0, 10)
+
+# 真实参数（相对于重度类别）
+beta0_true <- c(2, 1)      # 轻度、中度相对于重度的截距
+beta1_true <- c(-0.05, -0.02)  # 年龄效应
+beta2_true <- c(-0.3, -0.15)   # 严重程度评分效应
+
+# 生成真实的类别概率和结果
+alpha_true <- matrix(0, nrow = n, ncol = 3)
+alpha_true[, 1] <- beta0_true[1] + beta1_true[1] * age + beta2_true[1] * severity_score
+alpha_true[, 2] <- beta0_true[2] + beta1_true[2] * age + beta2_true[2] * severity_score
+alpha_true[, 3] <- 0  # 参考类别
+
+# 计算概率并生成类别
+theta_true <- t(apply(alpha_true, 1, function(x) exp(x) / sum(exp(x))))
+y <- apply(theta_true, 1, function(p) sample(1:3, 1, prob = p))
+
+stan_data_multi <- list(
+  y = y,
+  age = age,
+  severity_score = severity_score,
+  n = n,
+  K = 3
+)
+
+# 拟合模型
+fit_multinomial <- stan(model_code = model_multinomial, 
+                        data = stan_data_multi,
+                        chains = 4, iter = 2000,
+                        control = list(adapt_delta = 0.95))
+
+# 模型收敛性诊断
+print(fit_multinomial, pars = c("beta0", "beta1", "beta2"))
+
+# 轨迹图检查收敛性
+mcmc_trace(fit_multinomial, pars = c("beta0[1]", "beta0[2]", 
+                                     "beta1[1]", "beta1[2]",
+                                     "beta2[1]", "beta2[2]"))
+
+# 参数后验分布可视化
+mcmc_areas(fit_multinomial, pars = c("beta0[1]", "beta0[2]", 
+                                     "beta1[1]", "beta1[2]",
+                                     "beta2[1]", "beta2[2]")) +
+  ggtitle("多项逻辑回归参数后验分布") +
+  theme_minimal()
+
+# 参数间的相关性
+mcmc_pairs(fit_multinomial, pars = c("beta0[1]", "beta0[2]", 
+                                     "beta1[1]", "beta1[2]"))
+
+# 后验预测检查
+y_rep <- extract(fit_multinomial, "y_rep")$y_rep
+
+# 类别分布比较
+ppc_bars(y, y_rep[1:100, ]) +
+  ggtitle("观测值与后验预测值的类别分布比较") +
+  scale_x_continuous(breaks = 1:3, labels = c("轻度", "中度", "重度"))
+
+# 提取后验样本进行详细分析
+posterior_samples <- extract(fit_multinomial)
+
+# 计算概率预测的CI
+theta_samples <- posterior_samples$theta
+prob_marginal_samples <- posterior_samples$prob_marginal
+
+# 边际概率的后验分布
+prob_marginal_df <- data.frame(
+  轻度 = prob_marginal_samples[, 1],
+  中度 = prob_marginal_samples[, 2],
+  重度 = prob_marginal_samples[, 3]
+) %>%
+  tidyr::pivot_longer(everything(), names_to = "类别", values_to = "概率")
+
+ggplot(prob_marginal_df, aes(x = 概率, fill = 类别)) +
+  geom_density(alpha = 0.7) +
+  facet_wrap(~类别) +
+  ggtitle("各类别边际概率的后验分布") +
+  theme_minimal()
+
+# 预测新个体的类别概率
+new_age <- c(40, 60, 80)
+new_severity <- c(3, 6, 9)
+
+# 使用后验样本进行预测
+n_samples <- length(posterior_samples$beta0[,1])
+n_new <- length(new_age)
+
+pred_probs <- array(0, dim = c(n_samples, n_new, 3))
+
+for (s in 1:n_samples) {
+  for (i in 1:n_new) {
+    alpha_new <- c(
+      posterior_samples$beta0[s,1] + posterior_samples$beta1[s,1] * new_age[i] + 
+        posterior_samples$beta2[s,1] * new_severity[i],
+      posterior_samples$beta0[s,2] + posterior_samples$beta1[s,2] * new_age[i] + 
+        posterior_samples$beta2[s,2] * new_severity[i],
+      0
+    )
+    pred_probs[s, i, ] <- exp(alpha_new) / sum(exp(alpha_new))
+  }
+}
+
+# 可视化预测结果
+pred_summary <- apply(pred_probs, c(2, 3), function(x) c(mean(x), quantile(x, c(0.025, 0.975))))
+
+pred_df <- data.frame(
+  个体 = rep(paste0("个体", 1:3), each = 3),
+  年龄 = rep(new_age, each = 3),
+  严重程度 = rep(new_severity, each = 3),
+  类别 = rep(c("轻度", "中度", "重度"), 3),
+  概率均值 = as.vector(pred_summary[1, , ]),
+  概率下限 = as.vector(pred_summary[2, , ]),
+  概率上限 = as.vector(pred_summary[3, , ])
+)
+
+ggplot(pred_df, aes(x = 类别, y = 概率均值, fill = 类别)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = 概率下限, ymax = 概率上限), width = 0.2) +
+  facet_wrap(~个体, scales = "free") +
+  ggtitle("新个体的类别概率预测（95%CI）") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 模型比较：计算WAIC
+log_lik <- extract_log_lik(fit_multinomial)
+waic_multi <- waic(log_lik)
+print(waic_multi)
+
+# 效应大小评估：计算相对风险比
+rr_age_mild <- exp(posterior_samples$beta1[,1])
+rr_severity_mild <- exp(posterior_samples$beta2[,1])
+
+cat("年龄对轻度疾病相对风险比（相对于重度）：\n")
+cat("均值:", round(mean(rr_age_mild), 3), "\n")
+cat("95%CI:", round(quantile(rr_age_mild, c(0.025, 0.975)), 3), "\n\n")
+
+cat("严重程度评分对轻度疾病相对风险比（相对于重度）：\n")
+cat("均值:", round(mean(rr_severity_mild), 3), "\n")
+cat("95%CI:", round(quantile(rr_severity_mild, c(0.025, 0.975)), 3), "\n")
+```

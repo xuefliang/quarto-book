@@ -1,0 +1,866 @@
+# 线性混合模型 
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+贝叶斯线性混合模型（Bayesian Linear Mixed Models, BLMMs）结合了线性混合效应模型的灵活性与贝叶斯统计推断的优势，适用于具有复杂分层结构或重复测量的数据分析。该模型通过引入固定效应和随机效应来分别处理总体趋势和组内相关性，并通过贝叶斯框架量化参数不确定性。
+
+贝叶斯线性混合模型基于以下核心理论原则：
+
+1. **贝叶斯定理**：模型参数推断基于后验分布，该分布根据贝叶斯定理由先验分布与似然函数共同决定。
+
+2. **分层模型结构**：模型包含固定效应（population-level effects）和随机效应（group-specific effects），能够同时处理组间差异和组内相关性。
+
+3. **先验信息整合**：通过为模型参数指定先验分布，可以将领域知识或之前研究结果整合入分析过程。
+
+4. **不确定性量化**：贝叶斯方法提供参数的完整后验分布，而非仅提供点估计和标准误差。
+
+### 模型基本形式
+
+贝叶斯线性混合模型的数学表示如下：
+
+$$
+\mathbf{y} = \mathbf{X\beta} + \mathbf{Zu} + \mathbf{\epsilon}
+$$
+
+其中：
+- $\mathbf{y}$ 是 $n \times 1$ 维响应变量向量
+- $\mathbf{X}$ 是 $n \times p$ 维固定效应设计矩阵
+- $\mathbf{\beta}$ 是 $p \times 1$ 维固定效应参数向量
+- $\mathbf{Z}$ 是 $n \times q$ 维随机效应设计矩阵
+- $\mathbf{u}$ 是 $q \times 1$ 维随机效应向量
+- $\mathbf{\epsilon}$ 是 $n \times 1$ 维随机误差向量
+
+### 贝叶斯层次结构
+
+在贝叶斯框架下，模型参数被视为随机变量，其完整规范如下：
+
+1. **似然函数**：
+   $$\mathbf{y}|\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon \sim \mathcal{N}(\mathbf{X\beta} + \mathbf{Zu}, \sigma^2_\epsilon\mathbf{I}_n)$$
+
+2. **随机效应先验**：
+   $$\mathbf{u}|\mathbf{G} \sim \mathcal{N}(\mathbf{0}, \mathbf{G})$$
+ 
+   其中 $\mathbf{G}$ 是随机效应的协方差矩阵，通常表示为：
+   $$\mathbf{G} = \text{diag}(\sigma^2_{u_1}\mathbf{I}_{q_1}, \sigma^2_{u_2}\mathbf{I}_{q_2}, ..., \sigma^2_{u_m}\mathbf{I}_{q_m})$$
+ 
+3. **固定效应先验**：
+   $$\mathbf{\beta} \sim \mathcal{N}(\mathbf{\mu}_\beta, \mathbf{\Sigma}_\beta)$$
+
+4. **方差参数先验**：
+   $$\sigma^2_\epsilon \sim \text{Inv-Gamma}(a_\epsilon, b_\epsilon)$$
+   $$\sigma^2_{u_j} \sim \text{Inv-Gamma}(a_{u_j}, b_{u_j}), \quad j = 1, 2, ..., m$$
+
+### 后验分布
+
+根据贝叶斯定理，模型参数的联合后验分布为：
+
+$$p(\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon, \mathbf{G}|\mathbf{y}) \propto p(\mathbf{y}|\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon) \cdot p(\mathbf{u}|\mathbf{G}) \cdot p(\mathbf{\beta}) \cdot p(\sigma^2_\epsilon) \cdot p(\mathbf{G})$$
+
+由于该后验分布通常没有解析解，实践中多采用马尔可夫链蒙特卡罗（MCMC）方法如吉布斯采样（Gibbs sampling）或哈密顿蒙特卡罗（HMC）算法进行近似推断。
+
+### 预测分布
+
+对于新数据点 $\mathbf{X}^*$，其预测分布为：
+
+$$p(\mathbf{y}^*|\mathbf{y}, \mathbf{X}^*, \mathbf{Z}^*) = \int p(\mathbf{y}^*|\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon, \mathbf{X}^*, \mathbf{Z}^*) \cdot p(\mathbf{\beta}, \mathbf{u}, \sigma^2_\epsilon|\mathbf{y}) \, d\mathbf{\beta} \, d\mathbf{u} \, d\sigma^2_\epsilon \, d\mathbf{G}$$
+
+该积分通常通过从参数后验分布中抽样并计算条件预测来近似。
+
+## 数据
+penicillin数据集来源于青霉素的产生，有3个变量。
+
+```{r}
+data(penicillin,package = 'faraway')
+
+var_desc <- data.frame(
+  变量名 = names(penicillin),
+  描述 = c(
+    "生产类型（具有 4 个水平的系数）",
+    "用于生产的混料（具有 5 个水平的因子）",
+    "青霉素的生产量"
+  )
+)
+
+# 将生产类型的参考水平设置为 D 
+penicillin$treat <- relevel(penicillin$treat, "D")
+
+format_kable_table(var_desc)
+```
+
+## inla实现
+
+生产方法(treat)作为固定效应纳入模型,混合物批次(blend)代表了更大总体的随机样本，因为不关心具体哪种混合物批次效果更好，需要控制但不量化这种变异，将源混合物批次作为随机效应纳入模型。
+```{r}
+# 参数为 0.001和 0.001的精度的Gamma先验,在定义潜在随机效应时使用
+prec.prior <- list(prec = list(param = c(0.001, 0.001)))
+penicillin_inla <- inla(yield ~ 1 + treat + f(blend, model = "iid",
+    hyper = prec.prior),
+  data = penicillin, control.predictor = list(compute = TRUE))
+summary(penicillin_inla)
+```
+
+## brms实现
+INLA的先验设置为精度(precision)，而brms设置为标准差(sd)或方差(sigma²),# 在brms中，随机效应使用(1|group)语法.
+
+```{R}
+prior_specs <- c(
+  # 对随机效应方差的先验
+  prior(inv_gamma(0.001, 0.001), class = "sd", group = "blend"),
+  # 如果需要，也可以设置固定效应和截距的先验
+  prior(normal(0, 100), class = "Intercept"),
+  prior(normal(0, 10), class = "b")
+)
+
+penicillin_brms <- brm(
+  formula = yield ~ 1 + treat + (1|blend),
+  data = penicillin,  family = gaussian(),
+  prior = prior_specs,  chains = 4,  iter = 2000,
+  warmup = 1000,  control = list(adapt_delta = 0.9),
+  seed = 123,refresh = 0,silent=TRUE)
+
+summary(penicillin_brms)
+```
+
+这个贝叶斯混合效应模型分析了青霉素产量的治疗效果，但模型存在收敛问题。模型包含20个观测值，采用4条链各2000次迭代（1000次预热）进行MCMC采样。截距项：基线产量约为86.09单位。
+治疗效果：相对于对照组，treatA降低产量2.01单位，treatB降低0.97单位，treatC增加产量2.82单位，但所有治疗效果的95%CI都包含0，表明统计上不显著。随机效应：不同blend之间的标准差为1.78，但不确定性较大（95%CI: 0.00-6.52）。残差标准差：约为5.23单位。模型诊断问题：
+模型出现了774个发散转换警告，且多个参数的有效样本量（Bulk_ESS和Tail_ESS）偏低，特别是截距项和sigma参数，这表明MCMC链收敛不佳。
+
+## 二元响应变量
+
+### 数据
+ohio数据集来源于brinla包，是俄亥俄州有4个名儿童的哮喘数据，每名儿童有4行记录，分别表示7岁、8岁、9岁和10岁时的情况。
+
+```{r}
+data(ohio,package = 'brinla')
+
+var_desc <- data.frame(
+  变量名 = names(ohio),
+  描述 = c(
+    "是否有哮喘",
+    "编号",
+    "年龄",
+    "母亲是否吸烟"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+id 是标识变量，model="iid" 指定了这是一个独立同分布(Independent and Identically Distributed)的随机效应。
+
+```{r}
+formula <- resp ~ age + smoke + f(id, model="iid")
+ohio_inla <- inla(formula, family="binomial", data=ohio, control.predictor = list(compute = TRUE))
+summary(ohio_inla)
+```
+
+固定效应分析:年龄每增加1单位，对数几率平均减少0.173，年龄对响应变量有显著的负面影响。吸烟的95%CI: [-0.083, 0.858]包含0，不够显著。随机效应分析:个体间(id)的差异相当显著，表明存在未被固定效应捕获的异质性。
+
+由于参数以logit为尺度，需要借助变换帮助解释，以ilogit变换后仍然难以解释。
+```{r}
+ilogit <- function(x) exp(x)/(1 + exp(x))
+ilogit(ohio_inla$summary.fixed[1,c(3,4,5)])
+```
+
+通过指数解释回归参数，年龄增加1岁，哮喘概率增加0.85倍（即减少0.15）。
+```{r}
+exp(ohio_inla$summary.fixed[-1, c(3,4,5)])
+```
+
+### brms实现
+在brms中，随机截距使用(1|id)的语法表示
+```{r}
+formula<- resp ~ age + smoke + (1|id)
+
+ohio_brms <- brm(formula = formula, data = ohio, 
+  family = bernoulli(),  warmup = 1000,  iter = 3000,
+  chains = 4,  cores = 4,  # 并行运行链，加快计算
+  seed = 123,  # 设置随机种子以确保结果可重复
+  refresh = 0,silent=TRUE)
+summary(ohio_brms)
+```
+
+这个贝叶斯多水平逻辑回归模型分析了俄亥俄州儿童哮喘研究数据，模型收敛良好。数据包含2148个观测值（537个儿童的重复测量），采用4条链各3000次迭代（1000次预热）进行MCMC采样。年龄效应：年龄系数为-0.18（95%CI:-0.31至-0.05），表明随着年龄增长，哮喘症状出现的概率显著降低。每增加1岁，哮喘症状的对数几率降低0.18个单位。吸烟效应：母亲吸烟的系数为0.40（95%CI: -0.14至0.93），虽然点估计显示吸烟会增加儿童哮喘症状的风险，但95%置信区间包含0，统计上不显著。个体差异：个体间随机截距的标准差为2.19（95%CI:1.85至2.59），表明不同儿童之间在哮喘症状基线风险上存在显著的个体差异。所有参数的Rhat值均为1.00，有效样本量充足（Bulk_ESS和Tail_ESS都在2000以上），表明MCMC链收敛良好。
+
+## 连续响应变量
+### 数据
+数据来自lme4包，sleepstudy记录了睡眠剥夺研究中受试者每日平均反应时间的数据集，在第 0 天，受试者有正常的睡眠量。此后每晚被限制睡眠3小时。响应变量Reaction表示一系列测试中每天每个受试者平均反应时间（毫秒）。
+```{r}
+data(sleepstudy,package = "lme4")
+
+var_desc <- data.frame(
+  变量名 = names(sleepstudy),
+  描述 = c(
+    "平均反应时间",
+    "睡眠剥夺的天数",
+    "观测的受试者编号"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+需要分别指定随机截距和随机斜率,使用group参数明确指定随机效应之间的相关性，使用control.group=list(model="exchangeable")设置交换相关结构。创建了特定的索引变量idx.intercept和idx.slope，该方法可能提供更多的灵活性来指定不同的相关结构。
+```{r}
+sleepstudy |> 
+  mutate(Subject=as.numeric(Subject)) -> sleepstudy
+n <- nrow(sleepstudy)
+sleepstudy$idx.intercept <- sleepstudy$Subject  # 随机截距的索引
+sleepstudy$idx.slope <- sleepstudy$Subject      # 随机斜率的索引
+
+formula <- Reaction ~ Days + 
+                f(idx.intercept, model="iid", group=idx.slope, control.group=list(model="exchangeable")) + 
+                f(idx.slope, Days, model="iid")
+
+# control.compute参数用于计算模型诊断信息
+sleep_inla <- inla(formula, 
+                  family="gaussian", 
+                  data=sleepstudy,
+                  control.compute=list(dic=TRUE, waic=TRUE))
+summary(sleep_inla)
+```
+
+使用copy="Subject"参数告诉INLA使用与随机截距相同的随机效应结构，两种方法应该产生等价的结果，这种方法简化了语法。
+```{r}
+# 创建额外的ID变量用于随机斜率
+sleepstudy |> mutate(Subject=as.numeric(Subject),SubjectID = Subject)->sleepstudy
+
+# 使用copy功能
+formula <- Reaction ~ Days + 
+                f(Subject, model="iid") +                # 随机截距
+                f(SubjectID, Days, model="iid", copy="Subject")  # 随机斜率
+
+# 拟合模型
+sleep_inla2 <- inla(formula, 
+                   family="gaussian", 
+                   data=sleepstudy,
+                   control.compute=list(dic=TRUE, waic=TRUE))
+summary(sleep_inla2)
+```
+
+固定效应：Days每增加一天睡眠剥夺，反应时间平均增加10.435ms (95%CI：[6.972, 13.896])。随机截距精度: 7.915 (对应标准差约为0.356)，表示受试者基准反应时间的变异性。随机斜率精度: 0.020 (对应标准差约为7.07)，表示受试者对睡眠剥夺反应程度的变异性。GroupRho: -0.058，表示随机截距和随机斜率之间的相关性为负相关。
+
+### brms实现
+```{r}
+data(sleepstudy,package = "lme4")
+formula = Reaction ~ Days + (Days | Subject)
+sleep_brms <- brm(formula,  data = sleepstudy,  family = gaussian(),
+  chains = 4,   iter = 2000,      warmup = 1000,    
+  thin = 1,  # 稀疏参数
+  cores = 4,  # 并行计算使用的核心数
+  control = list(adapt_delta = 0.95),  # 提高HMC采样的稳定性
+  refresh = 0,silent=TRUE)
+summary(sleep_brms)
+
+# 进行后验预测检查
+pp_check(sleep_brms)
+```
+
+brms估计的随机效应和inla在本例中有所不同，截距的标准差为26.77，表明受试者基线反应时间存在较大差异。斜率的标准差为6.54，表明受试者对睡眠剥夺的敏感度也存在较大差异。截距-斜率相关性：相关系数为0.10但不显著，表明受试者的基线反应时间与其对睡眠剥夺的敏感度之间没有明确关系。
+
+## 广义线性混合效应模型
+当响应变量分布不再是高斯分布，就需要使用广义线性混合效应模型。
+
+###泊松分布
+
+#### 模型设定
+
+贝叶斯泊松回归模型的核心在于建立计数响应变量与协变量之间的概率关系。对于第 $i$ 个观测单位，计数响应变量 $y_i$ 服从泊松分布 $y_i | \lambda_i \sim \text{Poisson}(\lambda_i)$，其中 $\lambda_i$ 是该观测的强度参数。为确保强度参数的非负性并建立与协变量的线性关系，采用对数链接函数：$\log(\lambda_i) = \mathbf{x}_i^T \boldsymbol{\beta} = \beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip}$，等价于 $\lambda_i = \exp(\mathbf{x}_i^T \boldsymbol{\beta})$。对于 $n$ 个独立观测，联合似然函数为 $L(\boldsymbol{\beta}) = \prod_{i=1}^{n} \frac{\lambda_i^{y_i} e^{-\lambda_i}}{y_i!} = \prod_{i=1}^{n} \frac{[\exp(\mathbf{x}_i^T \boldsymbol{\beta})]^{y_i} \exp(-\exp(\mathbf{x}_i^T \boldsymbol{\beta}))}{y_i!}$。这一模型设定不仅保证了数学上的严谨性，也为处理各种计数数据问题提供了灵活的框架，包括事件发生次数、到达过程等应用场景。
+
+#### 先验分布
+
+先验分布的选择直接影响贝叶斯推断的质量和计算复杂度。**无信息先验**采用扁平分布 $\pi(\boldsymbol{\beta}) \propto 1$，适用于缺乏先验信息的情况，但可能导致后验分布的不当性。**正态先验**是最常用的选择，可设定为多元正态分布 $\boldsymbol{\beta} \sim N(\boldsymbol{\mu}_0, \boldsymbol{\Sigma}_0)$，其中 $\boldsymbol{\mu}_0$ 反映先验均值，$\boldsymbol{\Sigma}_0$ 控制先验不确定性；或采用独立正态先验 $\beta_j \sim N(\mu_{0j}, \sigma_{0j}^2)$，便于对每个系数设定不同的先验信息。**正则化先验**如Laplace先验 $\beta_j \sim \text{Laplace}(0, \lambda)$ 可实现变量选择，类似于LASSO回归的效果。**分层先验**结构 $\boldsymbol{\beta} | \tau^2 \sim N(\mathbf{0}, \tau^2 \mathbf{I})$，$\tau^2 \sim \text{Inverse-Gamma}(a, b)$ 允许数据自适应地学习先验参数，在处理高维问题时特别有用。**弱信息先验**如 $\beta_j \sim N(0, \sigma^2)$ 其中 $\sigma$ 较大，在提供轻微正则化的同时保持相对客观性。
+
+#### 后验推断
+
+后验推断是贝叶斯分析的核心环节，涉及后验分布的计算、总结和诊断。根据贝叶斯定理，参数的后验分布为 $\pi(\boldsymbol{\beta} | \mathbf{y}) \propto L(\boldsymbol{\beta}) \pi(\boldsymbol{\beta})$，其对数后验密度为 $\log \pi(\boldsymbol{\beta} | \mathbf{y}) \propto \sum_{i=1}^{n} [y_i \mathbf{x}_i^T \boldsymbol{\beta} - \exp(\mathbf{x}_i^T \boldsymbol{\beta})] + \log \pi(\boldsymbol{\beta})$。由于后验分布通常无解析解，需要采用**数值方法**进行推断。**MCMC方法**包括Metropolis-Hastings算法，通过计算接受概率 $\alpha = \min(1, \frac{\pi(\boldsymbol{\beta}^* | \mathbf{y}) q(\boldsymbol{\beta}^{(t)} | \boldsymbol{\beta}^*)}{\pi(\boldsymbol{\beta}^{(t)} | \mathbf{y}) q(\boldsymbol{\beta}^* | \boldsymbol{\beta}^{(t)})})$ 来更新参数；Gibbs采样在条件共轭的情况下交替采样各参数分量；Hamiltonian Monte Carlo利用梯度信息提高采样效率。**变分贝叶斯方法**通过最小化KL散度 $\text{KL}(q(\boldsymbol{\beta}) || \pi(\boldsymbol{\beta} | \mathbf{y}))$ 寻找最优近似分布，计算效率更高但精度略低。**后验总结**包括参数的后验均值、中位数、credible区间等描述性统计，以及通过 $y^{rep} \sim p(y^{rep} | \mathbf{y}) = \int p(y^{rep} | \boldsymbol{\beta}) \pi(\boldsymbol{\beta} | \mathbf{y}) d\boldsymbol{\beta}$ 进行后验预测。**模型诊断**通过检查MCMC收敛性（如Gelman-Rubin统计量）、后验预测检验、残差分析等评估模型适用性。**模型比较**采用DIC、WAIC、LOO-CV等信息准则选择最优模型。当遇到过离散、零膨胀等数据特征时，需要考虑负二项回归、零膨胀泊松模型等扩展，并进行相应的敏感性分析确保推断稳健性。
+
+#### 数据
+数据来自lme4包，sleepstudy记录了睡眠剥夺研究中受试者每日平均反应时间的数据集，在第 0 天，受试者有正常的睡眠量。此后每晚被限制睡眠3小时。响应变量Reaction表示一系列测试中每天每个受试者平均反应时间（毫秒）。
+```{r}
+data(epilepsy,package = "faraway")
+
+var_desc <- data.frame(
+  变量名 = names(epilepsy),
+  描述 = c(
+    "癫痫发作次数",
+    "ID",
+    "分组，1=已治疗，0=未治疗",
+    "分期，0=基线期，1=治疗期",
+    "周期",
+    "年龄"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+
+### brms实现
+以研究治疗（由变量 Trt 表示）是否可以减少发作次数，以及治疗效果是否随患者在治疗前的（标准化）基线发作次数变化（变量 zBase）。由于我们每人都有多次观察，引入组级截距以应对数据中随之产生的依赖性。
+```{r}
+epilepsy_brms <- brm(seizures ~ age + expind * treat + (1|id),
+            data = epilepsy, family = poisson(),refresh = 0,silent=TRUE)
+
+summary(epilepsy_brms)
+```
+
+研究295个癫痫发作观测值（来自59名患者）。患者间基线发作率差异较大（随机截距标准差=0.81）；实验期相比基线期癫痫发作次数显著减少72%（expind系数=-1.27，率比=0.28）；治疗药物的主效应不显著（treat系数=-0.04），但在实验期可能有额外10%的减少效果（交互效应=-0.11）；年龄对发作频率影响很小且不显著。贝叶斯抽样通过4000个后验样本完成，所有参数Rhat值接近1且有效样本量充足，表明模型收敛良好。总体而言，时间效应（实验期vs基线期）比治疗效应更为显著，提示可能存在观察期效应或需要进一步评估治疗的长期效果。
+
+### inla实现
+```{r}
+epilepsy_inla <- inla(seizures ~ age + expind * treat + f(id, model = "iid"),
+                      data = epilepsy, 
+                      family = "poisson",
+                      control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+                      control.predictor = list(compute = TRUE))
+
+summary(epilepsy_inla)
+bri.hyperpar.summary(epilepsy_inla)
+```
+固定效应结果与brms高度一致：实验期相比基线期癫痫发作次数显著减少约72%（expind系数=-1.274，95%CI不包含0），这是模型中最显著的效应；治疗主效应不显著（treat系数=-0.026），交互效应也较弱（expind:treat系数=-0.105，95%CI接近包含0）；年龄效应很小且不显著。模型包含患者个体随机效应（id），有效参数数量为10.25个。模型拟合指标显示：DIC=1787.44，WAIC=2439.32，边际对数似然=-1048.03，所有后验概率计算完成且收敛良好（KLD值均为0）。与brms结果相比，INLA方法在保持相同统计推断结论的同时，计算效率显著提升。
+
+### 二项分布
+
+贝叶斯二项回归模型用于分析二元响应变量或比例数据与协变量之间的关系。对于第 $i$ 个观测单位，响应变量 $y_i$ 服从二项分布 $y_i | n_i, p_i \sim \text{Binomial}(n_i, p_i)$，其中 $n_i$ 是试验次数，$p_i$ 是成功概率。为建立成功概率与协变量的关系并确保概率值在 $[0,1]$ 区间内，通常采用**logit链接函数**：$\text{logit}(p_i) = \log\left(\frac{p_i}{1-p_i}\right) = \mathbf{x}_i^T \boldsymbol{\beta} = \beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip}$，等价于 $p_i = \frac{\exp(\mathbf{x}_i^T \boldsymbol{\beta})}{1 + \exp(\mathbf{x}_i^T \boldsymbol{\beta})}$。其他常用链接函数包括**probit链接** $\Phi^{-1}(p_i) = \mathbf{x}_i^T \boldsymbol{\beta}$（其中 $\Phi$ 是标准正态累积分布函数）和**互补对数-对数链接** $\log(-\log(1-p_i)) = \mathbf{x}_i^T \boldsymbol{\beta}$。对于 $n$ 个独立观测，联合似然函数为 $L(\boldsymbol{\beta}) = \prod_{i=1}^{n} \binom{n_i}{y_i} p_i^{y_i} (1-p_i)^{n_i-y_i}$。当 $n_i = 1$ 时，模型退化为logistic回归；当处理比例数据时，$n_i$ 可以是不同的正整数。该模型框架广泛应用于医学试验、市场研究、质量控制等需要分析成功率或比例的场景。
+
+#### 先验分布
+
+先验分布的选择在二项回归中尤为重要，因为它直接影响概率估计的合理性和数值稳定性。**无信息先验**采用扁平分布 $\pi(\boldsymbol{\beta}) \propto 1$，在样本量充足时提供客观的推断，但在小样本或数据稀疏情况下可能导致估计不稳定。**正态先验**是最广泛使用的选择，可设定为多元正态分布 $\boldsymbol{\beta} \sim N(\boldsymbol{\mu}_0, \boldsymbol{\Sigma}_0)$，其中截距项通常设定较大的方差以保持灵活性，回归系数的先验方差反映对效应大小的预期；独立正态先验 $\beta_j \sim N(\mu_{0j}, \sigma_{0j}^2)$ 便于对不同系数设定个性化的先验信息。**Cauchy先验** $\beta_j \sim \text{Cauchy}(0, \gamma)$ 具有厚尾特性，对异常值不敏感，特别适用于稳健性要求较高的场景。**正则化先验**如Laplace先验 $\beta_j \sim \text{Laplace}(0, \lambda)$ 实现变量选择，horseshoe先验 $\beta_j \sim N(0, \lambda_j \tau)$ 其中 $\lambda_j \sim C^+(0,1)$，$\tau \sim C^+(0,1)$ 在高维设定下表现优异。**分层先验**结构允许借用信息，如 $\boldsymbol{\beta} | \sigma^2 \sim N(\boldsymbol{\mu}, \sigma^2 \mathbf{I})$，$\sigma^2 \sim \text{Inverse-Gamma}(a, b)$，$\boldsymbol{\mu} \sim N(\mathbf{m}, \mathbf{S})$。**弱信息先验**如 $\beta_j \sim N(0, 2.5^2)$ 在logit尺度上提供温和的正则化，是实践中的常见选择。
+
+#### 后验推断
+
+后验推断构成了贝叶斯二项回归分析的核心，涉及后验分布的计算、参数估计、预测和模型诊断等多个层面。根据贝叶斯定理，参数的后验分布为 $\pi(\boldsymbol{\beta} | \mathbf{y}) \propto L(\boldsymbol{\beta}) \pi(\boldsymbol{\beta})$，其对数后验密度为 $\log \pi(\boldsymbol{\beta} | \mathbf{y}) \propto \sum_{i=1}^{n} [y_i \mathbf{x}_i^T \boldsymbol{\beta} - n_i \log(1 + \exp(\mathbf{x}_i^T \boldsymbol{\beta}))] + \log \pi(\boldsymbol{\beta})$。由于后验分布通常无解析解，需要依赖数值方法。**MCMC采样**是主要工具，包括Metropolis-Hastings算法，通过提议分布 $q(\boldsymbol{\beta}^* | \boldsymbol{\beta}^{(t)})$ 和接受概率 $\alpha = \min(1, \frac{\pi(\boldsymbol{\beta}^* | \mathbf{y}) q(\boldsymbol{\beta}^{(t)} | \boldsymbol{\beta}^*)}{\pi(\boldsymbol{\beta}^{(t)} | \mathbf{y}) q(\boldsymbol{\beta}^* | \boldsymbol{\beta}^{(t)})})$ 更新参数；Gibbs采样在使用数据增强技术（如Pólya-Gamma augmentation）时特别有效；Hamiltonian Monte Carlo和No-U-Turn Sampler (NUTS) 利用梯度信息实现高效采样。**变分推断**通过最小化 $\text{KL}(q(\boldsymbol{\beta}) || \pi(\boldsymbol{\beta} | \mathbf{y}))$ 提供快速近似，适用于大规模数据。**Laplace近似**在后验众数附近进行二阶泰勒展开，为正态近似提供解析解。**预测推断**通过后验预测分布 $p(y^{new} | \mathbf{x}^{new}, \mathbf{y}) = \int p(y^{new} | \mathbf{x}^{new}, \boldsymbol{\beta}) \pi(\boldsymbol{\beta} | \mathbf{y}) d\boldsymbol{\beta}$ 进行新观测的概率预测。**模型诊断**包括MCMC诊断（收敛性检验、有效样本量、$\hat{R}$ 统计量）、后验预测检验通过 $p\text{-value} = P(\chi^2(y^{rep}) \geq \chi^2(y) | \mathbf{y})$ 评估模型拟合质量、残差分析（Pearson残差、deviance残差）检查模型假设。处理过离散的beta-binomial模型、处理零膨胀的零膨胀二项模型、多层次数据的分层logistic回归等，同时需要进行敏感性分析评估先验选择对推断结果的影响，确保结论的稳健性和可靠性。
+
+#### 数据
+数据来自1988年孟加拉国城乡地区妇女避孕使用情况,包含1934个观测值和以下6个变量。
+```{r}
+data(Contraception,package = 'mlmRev')
+
+var_desc <- data.frame(
+  变量名 = names(Contraception),
+  描述 = c(
+    "每位女性的ID",
+    "每个地区的ID",
+    "避孕措施是否使用",
+    "存活子女数量",
+    "女性的年龄",
+    "居住区域类型,城市和农村"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+#### brms实现
+```{r}
+#只有随机截距
+Contraception_brms <- brm(use ~ age + urban + livch + (1|district), 
+              data = Contraception, family = bernoulli(),
+              chains = 4, iter = 2000, cores = 4,refresh = 0,silent=TRUE)
+
+# 包含随机斜率的模型
+Contraception_brms2 <- brm(use ~ age + urban + livch + (1 + age|district), 
+              data = Contraception, family = bernoulli(),
+              chains = 4,  iter = 2000,  cores = 4,refresh = 0,silent=TRUE)
+
+# 包含交互效应的模型
+Contraception_brms3 <- brm(use ~ age * urban + livch + (1|district), 
+              data = Contraception,  family = bernoulli(),
+              chains = 4, iter = 2000,  cores = 4,refresh = 0,silent=TRUE)
+```
+
+#### inla实现
+
+模型1：随机截距模型
+```{r}
+# 将因子转换为数值型 (Y=1, N=0)
+Contraception$use_numeric <- as.numeric(Contraception$use == "Y")
+
+formula1 <- use_numeric ~ age + urban + livch + f(district, model = "iid")
+
+Contraception_inla1 <- inla(formula1,
+                           data = Contraception,
+                           family = "binomial",
+                           control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+                           control.predictor = list(compute = TRUE))
+
+# 查看结果
+summary(Contraception_inla1)
+```
+
+结果显示所有固定效应均显著：年龄效应为负（-0.027, 95%CI: -0.042至-0.011），表明年龄越大避孕使用概率越低；城市居住显著提高避孕使用概率（0.737, 95%CI: 0.505-0.968）；存活子女数对避孕使用有强烈正向影响，1个孩子（1.110）、2个孩子（1.377）和3个及以上孩子（1.345）的系数都很大且CI不包含0，说明有孩子的女性更倾向于使用避孕措施。模型包含了地区层面的随机效应来控制地区间的异质性，DIC（2408.01）和WAIC（2407.76）值接近表明模型拟合稳定，有效参数数量约36个，边际对数似然为-1247.27，整体模型较好地识别了影响避孕使用的关键人口学和社会经济因素。
+
+模型2：随机截距模型+随机斜率
+```{r}
+# 为随机效应创建索引变量
+Contraception$district_intercept <- as.numeric(as.factor(Contraception$district))
+Contraception$district_slope <- as.numeric(as.factor(Contraception$district))
+# 使用INLA拟合模型
+Contraception_inla2 <- inla(use_numeric  ~ age + urban + livch + 
+                           f(district_intercept, model = "iid") +
+                           f(district_slope, age, model = "iid"),
+                          family = "binomial",
+                          data = Contraception,
+                          control.predictor = list(link = 1),
+                          control.compute = list(dic = TRUE, waic = TRUE))
+
+# 查看结果
+summary(Contraception_inla2)
+
+# 查看固定效应
+Contraception_inla2$summary.fixed
+# 查看随机效应的方差
+Contraception_inla2$summary.hyperpar
+# 提取随机截距
+Contraception_inla2$summary.random$district_intercept
+# 提取随机斜率
+Contraception_inla2$summary.random$district_slope
+```
+
+在前一个模型基础上增加了随机斜率效应，允许地区间不仅截距不同，某些效应的斜率也可以变化，模型复杂度提高导致运行时间增加到0.999秒。固定效应结果与简单模型几乎完全一致：年龄负效应（-0.027）、城市正效应（0.739）和存活子女数的强正效应（1个孩子1.113，2个孩子1.379，3个及以上1.347）均保持显著。模型现在包含两个随机效应：地区随机截距和地区随机斜率，增强了对地区间异质性的建模能力。模型拟合指标略有改善，DIC从2408.01降至2407.14，WAIC从2407.76降至2406.86，边际对数似然从-1247.27提高到-1247.10，但有效参数数量从36.90增加到39.39，表明增加随机斜率虽然提供了更灵活的建模框架来捕捉地区间的差异，但模型改善程度有限，需要权衡模型复杂度与预测性能的提升。
+
+模型3：交互效应模型
+```{r}
+# 创建交互项
+Contraception$age_urban_Y <- ifelse(Contraception$urban == "Y", 
+                                    Contraception$age, 0)
+
+formula3 <- use_numeric ~ age + urban + livch + age_urban_Y + 
+            f(district, model = "iid")
+
+Contraception_inla3 <- inla(formula3,
+                           data = Contraception,
+                           family = "binomial",
+                           control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+                           control.predictor = list(compute = TRUE))
+
+# 查看结果
+summary(Contraception_inla3)
+```
+
+在基础模型上增加了年龄与城市居住的交互效应（age_urban_Y），主效应基本保持稳定：年龄负效应略有减弱（-0.024 vs -0.027），城市正效应（0.740）和存活子女数的强正效应（1个孩子1.116，2个孩子1.384，3个及以上1.354）仍然显著。关键发现是年龄与城市居住的交互效应为负（-0.011），但不显著（95%CI: -0.035至0.013，包含0），表明城市和农村地区的年龄对避孕使用的影响程度可能存在差异，但这种差异在统计上不显著。模型拟合效果不如前两个模型，DIC增加到2409.13，WAIC增加到2408.91，边际对数似然降低到-1254.70，有效参数数量为37.86，模型回到了简单的地区随机截距结构。总体而言，增加年龄与城市居住的交互效应并未显著改善模型性能，提示在避孕使用行为中，年龄效应在城乡间的差异可能不是主要的影响机制。
+
+```{r}
+#| warning: false
+#| eval: false
+#| echo: true
+# 数据预处理
+Contraception$use_numeric <- as.numeric(Contraception$use == "Y")
+Contraception$district_id <- as.integer(as.factor(Contraception$district))
+Contraception$urban <- as.numeric(Contraception$urban == "Y") 
+Contraception$livch <- as.numeric(as.factor(Contraception$livch))
+
+
+# 模型1：只有随机截距
+Contraception_inlabru1 <- bru(
+  components = use_numeric ~ age + urban + livch + district_id(main = district_id,model = "iid"),
+  formula = use_numeric ~ age + urban + livch + district_id,
+  data = Contraception,
+  family = "binomial"
+)
+
+# 模型2：随机截距 + 随机斜率
+Contraception_inlabru2 <- bru(
+  components = use_numeric ~ 
+    # 固定效应
+    age + urban + livch + 
+    # 随机截距（按地区）
+    district_id(main = district_id, model = "iid") +
+    # 随机斜率（例如：age的随机斜率）
+    district_age(main = district_id, model = "iid", group = age) +
+    # 或者为urban添加随机斜率
+    district_urban(main = district_id, model = "iid", group = urban),
+  
+  formula = use_numeric ~ 
+    age + urban + livch + 
+    district_id + 
+    district_age + 
+    district_urban,
+  
+  data = Contraception,
+  family = "binomial"
+)
+
+# 模型3：交互效应
+Contraception_inlabru3 <- bru(
+  components = use_numeric ~ 
+    age * urban + livch + 
+    district_id(main = district_id, model = "iid"),
+  formula = use_numeric ~ age * urban + livch + district_id,
+  data = Contraception,
+  family = "binomial"
+)
+
+# 查看结果
+summary(Contraception_inlabru1)
+summary(Contraception_inlabru2)
+summary(Contraception_inlabru3)
+```
+
+
+### Gamma分布
+贝叶斯Gamma回归模型适用于响应变量 $y_i$（非负连续变量，例如等待时间、医疗费用或降雨量）呈现右偏分布的场景。Gamma分布因其灵活性（能建模多种右偏形状）和非负约束而被广泛使用。
+
+#### 概率模型
+
+响应变量 $y_i$ 假设服从Gamma分布，采用**均值-精度参数化**：
+$$y_i \sim \text{Gamma}(\phi \mu_i, \phi), \quad i = 1, \dots, n$$
+
+- **精度参数 $\phi$**：控制分布的精度（方差的倒数）。$\phi$ 越大，方差越小，分布越集中
+- **均值参数 $\mu_i$**：分布的期望值，依赖于协变量
+- **分布性质**：均值为 $\mathbb{E}[y_i] = \mu_i$，方差为 $\text{Var}[y_i] = \mu_i^2 / \phi$
+均值-精度参数化的优势是均值和方差的依赖关系 $\text{Var}[y_i] = \mu_i^2 / \phi$ 使得模型适合异方差数据（方差随均值增加而增加），例如在医疗数据中，费用较高的患者其费用方差通常也较大。
+
+#### 回归框架
+
+为了将协变量 $\mathbf{x}_i$（如年龄、收入等）与响应变量联系起来，均值 $\mu_i$ 通过线性预测器建模：
+$$\eta_i = \mathbf{x}_i^T \boldsymbol{\beta}, \quad \mu_i = g^{-1}(\eta_i)$$
+
+- **链接函数 $g(\cdot)$**：
+  - **对数链接**：$g(\mu_i) = \log(\mu_i)$，即 $\mu_i = \exp(\mathbf{x}_i^T \boldsymbol{\beta})$。这是**最常用**的选择，确保 $\mu_i > 0$ 且解释简单，对数链接下，$\beta_j$ 表示协变量 $x_j$ 增加1单位时，$\log(\mu_i)$ 的变化，即 $\mu_i$ 的倍数效应为 $\exp(\beta_j)$，便于解释相对效应。
+  - **倒数链接**：$g(\mu_i) = 1/\mu_i$，即 $\mu_i = 1 / (\mathbf{x}_i^T \boldsymbol{\beta})$。这是Gamma回归的标准链接，但要求 $\mathbf{x}_i^T \boldsymbol{\beta} > 0$，实际应用中较少使用。
+- **精度参数 $\phi$**：通常假定为常数以简化模型，但高级模型可允许 $\phi$ 随协变量变化，增加灵活性
+
+#### 先验分布
+
+贝叶斯方法的核心是为未知参数指定先验分布，反映建模者对参数的先验信念。Gamma回归模型中的参数包括回归系数 $\boldsymbol{\beta}$ 和精度参数 $\phi$。
+
+**回归系数 $\boldsymbol{\beta}$**
+
+- **先验选择**：常用正态分布：
+  $$\beta_j \sim \text{N}(m_{0j}, \sigma_{0j}^2), \quad j = 1, \dots, p$$
+  - 默认设置：$m_{0j} = 0$，$\sigma_{0j}^2 = 100^2$，表示弱信息先验。弱信息先验允许数据主导后验推断，适合缺乏领域知识时。若有专家知识（如某协变量对响应变量的正向影响），可设置 $m_{0j} > 0$
+- **正则化效果**：正态先验相当于L2正则化，防止系数过拟合，尤其在高维数据中
+
+**精度参数 $\phi$**
+
+- **先验选择**：常用Gamma分布：
+  $$\phi \sim \text{Gamma}(a_0, b_0)$$
+  - **推荐参数设置**：
+    - $a_0 = 0.01, b_0 = 0.01$（弱信息先验）
+    - $a_0 = 1, b_0 = 1$（单位指数先验）
+  - **解释**：Gamma先验与Gamma似然具有共轭性质，有助于后验计算。选择小参数值（如0.01, 0.01）提供弱信息，避免对 $\phi$ 的强假设
+- **替代先验**：若需要更灵活的先验，可用对数正态分布 $\log(\phi) \sim \text{N}(\mu_\phi, \sigma_\phi^2)$，但失去共轭性质。
+
+**联合先验**
+
+$$p(\boldsymbol{\beta}, \phi) = \left[\prod_{j=1}^p p(\beta_j)\right] \cdot p(\phi)$$
+
+在实际建模医疗费用时，若领域专家认为年龄对费用有显著正向影响，可为对应的 $\beta$ 设置正均值先验（如 $\beta_{\text{age}} \sim \text{N}(0.5, 1^2)$）。精度参数 $\phi$ 的先验可基于历史数据的离散程度调整。
+
+#### 后验推断
+
+后验分布结合似然和先验，反映数据更新后的参数分布：
+$$p(\boldsymbol{\beta}, \phi | \mathbf{y}, \mathbf{X}) \propto p(\mathbf{y} | \boldsymbol{\beta}, \phi, \mathbf{X}) \cdot p(\boldsymbol{\beta}) \cdot p(\phi)$$
+
+**似然函数**
+
+在均值-精度参数化下，Gamma分布的似然为：
+$$p(\mathbf{y} | \boldsymbol{\beta}, \phi, \mathbf{X}) = \prod_{i=1}^n \frac{\phi^{\phi\mu_i}}{\Gamma(\phi\mu_i)} y_i^{\phi\mu_i-1} e^{-\phi y_i}$$
+其中 $\mu_i = \exp(\mathbf{x}_i^T \boldsymbol{\beta})$（对数链接）。
+
+似然函数衡量给定参数下观测数据的概率密度。$\mu_i$ 通过链接函数将协变量效应融入模型。
+
+**后验计算**
+由于对数链接函数和Gamma分布的非线性特性，贝叶斯Gamma回归模型的后验分布通常无闭合解析解，需要借助马尔科夫链蒙特卡洛（MCMC）方法进行数值计算。常用的MCMC算法包括Hamilton Monte Carlo (HMC)，它利用梯度信息实现高效采样，相比传统的Metropolis-Hastings算法具有更好的收敛性能；Gibbs采样在精度参数$\phi$使用Gamma先验时特别有效，因为其条件后验分布仍为Gamma分布，可以直接采样；以及No-U-Turn Sampler (NUTS)，作为HMC的自适应版本，是Stan等现代贝叶斯软件的默认算法。在实际应用中，Stan凭借其高效的HMC/NUTS采样和自动微分功能广受欢迎，而JAGS作为经典的贝叶斯软件主要采用Gibbs采样策略。
+
+为确保MCMC采样的可靠性，需要进行严格的收敛诊断，包括使用$\hat{R}$统计量进行多链收敛检验（通常要求$\hat{R} < 1.01$），监控有效样本量（ESS > 400通常足够保证估计精度），以及通过轨迹图目视检验MCMC链的混合情况。基于收敛的后验样本，可以计算多种统计量：点估计通常采用后验均值$\mathbb{E}[\theta | \mathbf{y}]$或后验中位数；不确定性通过95%CI$[\theta_{0.025}, \theta_{0.975}]$进行量化；协变量显著性检验则通过检查回归系数$\beta_j$的95%CI是否包含0来判断，若不包含0则表明协变量$x_j$对响应变量具有显著影响。
+
+### 数据
+Insurance中提供的数据包含了一家保险公司在1973年第三季度面临风险的投保人数量，以及这些投保人提出的汽车保险索赔数量。
+```{r}
+data(Insurance,package = 'MASS')
+
+var_desc <- data.frame(
+  变量名 = names(Insurance),
+  描述 = c(
+    "地区因子 保单持有人的居住区域（1至4级）：4代表主要城市。",
+    "组别 车辆排量分组，等级为 <1升、1–1.5升、1.5–2升、>2升。",
+    "年龄 被保险人的年龄分为4组，标记为 <25岁、25–29岁、30–35岁、>35岁",
+    "保单持有人的数量",
+    "索赔的数量"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+#### brms实现
+```{r}
+Insurance %>% 
+  mutate(ClaimRate_adj=Claims/Holders) -> Insurance
+
+# 模型1: 复杂的随机效应结构
+Insurance_brms1 <- brm(ClaimRate_adj ~ Group * Age + (1|District),
+                   data = Insurance,
+                   family = hurdle_gamma(link = "log"), # 响应变量无0值，使用gamma(link = "log")
+                   cores = 4, chains = 4,  iter = 2000, 
+                   warmup = 1000,refresh = 0,silent=TRUE) # 预热次数
+summary(Insurance_brms1)
+
+
+# 模型2: 考虑exposure（投保人数）作为offset
+Insurance_brms2 <- brm(Claims ~ Group * Age + offset(log(Holders)) + (1|District),
+                   data = Insurance, family = hurdle_gamma(link = "log"),
+                   cores = 4,chains = 4,iter = 2000,
+                   warmup = 1000,refresh = 0,silent=TRUE)
+summary(Insurance_brms2)
+```
+
+基于64个观测值的贝叶斯推断结果显示：模型收敛良好（所有Rhat≈1.00）且参数估计可靠。在固定效应中，Group的线性趋势效应显著为正（0.49, 95%CI: 0.35-0.65），Age的线性趋势效应显著为负（-0.39, 95%CI: -0.53至-0.24），表明不同组别间理赔率存在系统性差异，且理赔率随年龄呈下降趋势；而Group与Age的交互效应均不显著，所有CI包含0。District层面的随机效应较小（sd=0.13），表明地区间差异有限。模型的hurdle部分显示零值概率很低（hu=0.03），说明大部分观测都有正的理赔率，而gamma部分的shape参数为12.34表明理赔率分布相对集中，整体模型较好地捕捉了数据中非零理赔率的分布特征和主要影响因素。从结果来看，两个模型得出了几乎相同的参数估计值，这表明两种建模方法是等价的。主要发现包括：Group的线性对比项(Group.L)和Age的线性对比项(Age.L)具有显著效应，而交互作用项大多不显著。District间的随机变异较小(sd约0.12-0.13)，Hurdle参数(hu)约为0.03，表明约3%的观测值为零。
+
+#### inlabru实现
+inlabru没有直接实现hurdle_gamma模型，可以使用poisson进行替代。
+```{r}
+# model="factor_full"，one coefficient per level
+# model = "factor_contrast"，Factor input, first level is dropped
+comp2 <- ~ group_effect(main = Group, model = "factor_contrast") + 
+  age_effect(main = Age, model = "factor_contrast") + 
+  district_effect(main = District, model = "iid")
+
+Insurance_inlabru2 <- bru(
+  components = comp2,
+  formula = Claims ~ group_effect + age_effect + district_effect,
+  family = "poisson",
+  data = Insurance,
+  E = Insurance$Holders,
+  options = list(
+    control.predictor = list(link = 1),
+    control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE)
+  )
+)
+summary(Insurance_inlabru2)
+
+Insurance_inlabru2$summary.hyperpar
+Insurance_inlabru2$summary.random$group_effect
+Insurance_inlabru2$summary.random$age_effect
+Insurance_inlabru2$summary.random$district_effect
+```
+
+车辆组别效应显示了不同排量车辆的索赔风险差异：大排量车辆（>2l）具有最高的正效应（0.557），表明索赔风险最高；中等排量车辆（1.5-2l）风险居中（0.387）；而小排量车辆（1-1.5l）风险最低（0.156）。因为大排量车辆通常价值更高，维修成本也更昂贵。年龄组效应均为负值，这是因为模型使用了对数链接函数，负值表明相对于基准组（可能是最年轻的<25岁组）的相对风险。年龄>35岁的驾驶员具有最大的负效应（-0.550），表明他们的索赔风险相对最低，这与驾驶经验丰富、更加谨慎的预期一致；而25-29岁组的负效应最小（-0.206），表明其风险相对较高。地区效应显示了不同地区的索赔基准水平差异，所有地区都显示较大的负效应（约-1.6到-1.8），表明相对于某个参考点的整体索赔水平。地区4的效应最小（-1.569），而地区3的效应最大（-1.765）。模型精度通过地区效应的精度参数（0.502）来控制，其较宽的CI（0.104-1.226）表明地区间存在一定程度的异质性。整体而言，模型很好地捕捉了车辆类型、驾驶员年龄和地区对保险索赔的差异化影响。
+
+### inla实现
+```{r}
+# 将因子转换为数值索引
+Insurance$Group_idx <- as.numeric(as.factor(Insurance$Group))
+Insurance$Age_idx <- as.numeric(as.factor(Insurance$Age))  
+Insurance$District_idx <- as.numeric(as.factor(Insurance$District))
+
+# 使用纯INLA拟合模型
+Insurance_inla2 <- inla(
+  Claims ~ f(Group_idx, model = "iid", 
+             constr = TRUE,  # 相当于factor_contrast，添加约束使第一个水平为参考
+             hyper = list(prec = list(prior = "loggamma", param = c(1, 0.00005)))) +
+    f(Age_idx, model = "iid", 
+      constr = TRUE,
+      hyper = list(prec = list(prior = "loggamma", param = c(1, 0.00005)))) +
+    f(District_idx, model = "iid",
+      hyper = list(prec = list(prior = "loggamma", param = c(1, 0.00005)))),
+  family = "poisson",
+  data = Insurance,
+  E = Insurance$Holders,  # 暴露量
+  control.predictor = list(link = 1),
+  control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE)
+)
+
+# 查看结果
+summary(Insurance_inla2)
+
+# 查看超参数（精度参数）
+Insurance_inla2$summary.hyperpar
+
+# 查看随机效应
+Insurance_inla2$summary.random$Group_idx      # 对应group_effect
+Insurance_inla2$summary.random$Age_idx        # 对应age_effect  
+Insurance_inla2$summary.random$District_idx   # 对应district_effect
+
+# 查看固定效应（截距）
+Insurance_inla2$summary.fixed
+```
+
+模型整体表现良好，DIC值为396.29，WAIC值为397.71，有效参数数约为7-8个。固定效应截距为-1.789，表明在参考水平下的对数风险率。随机效应方面：Group变量显示出最大的变异性，其中第4组风险最高(0.260)，第1组风险最低(-0.260)；Age变量中年轻组风险最高(0.228)，老年组风险最低(-0.248)；District变量的效应相对较小且接近0，表明地区间差异不大(-0.007到0.011之间)。总体而言，组别和年龄是影响保险理赔的主要因素，而地区效应较为微弱。所有随机效应的CI都不包含0（除了District），说明Group和Age的分类效应是统计显著的。
+
+### beta分布
+如何对取值在标准单位区间(0,1)的因变量（或响应变量）$y$进行回归分析？传统方法通常是对数据进行变换，使变换后的响应变量（例如 $\tilde{y}$ ）取值在实数轴上，然后应用标准的线性回归分析。常用的变换方法是逻辑变换，即  $\tilde{y} = \log\left(\frac{y}{1-y}\right)$ 。然而，这种方法存在一些缺点。首先，回归参数是针对  $\tilde{y} $的均值进行解释，而非直接针对$y$的均值（考虑Jensen不等式）。其次，涉及单位区间的回归（如比率和比例）通常具有异方差性：在均值附近表现出较大的变异，而在接近单位区间的上下限时变异较小。最后，比率和比例的分布通常是非对称的，因此基于高斯分布的区间估计和假设检验在小样本情况下可能相当不准确。一种适用于取值在标准单位区间的连续变量（如比率、比例或集中指数）的回归模型。由于该模型假设响应变量服从beta分布，他们称之为**beta回归模型**。在该模型中，回归参数可直接解释为$y$（目标变量）的均值，且模型天然具有异方差性，能够轻松适应非对称性。**可变分散beta回归模型**允许非线性和可变分散，其中数据精度的参数不再假定为常数，而是允许随观测变化。
+
+beta回归模型的主要动机在于假定beta分布所带来的灵活性。beta密度可以根据参数值的组合呈现出多种形状，包括左偏、右偏或均匀密度的平坦形状（均匀密度是beta密度的特例）。beta分布的明显灵活性使其成为数据驱动统计建模的理想选择。beta回归模型假定目标（离散）变量包含由独立beta分布变量确定的更灵活的变异结构，这些变量通过回归结构与一组自变量相关。然而，与近期文献不同，早期的重点在于建模二项随机变量。我们在本文中更关注近期文献，即建模取值在(0,1)的连续随机变量，如比率、比例和集中或不平等指数（如基尼系数）。
+
+beta回归模型适用于建模取值在开放标准单位区间(0,1)的连续变量  y 。若变量取值在(a,b)（已知  a < b ），可建模  $(y-a)/(b-a)$ 。此外，若  y  也取边界值0和1，实践中常用的变换是$(y \cdot (n-1) + 0.5)/n$，其中  n  为样本大小。
+贝叶斯beta回归模型在经典beta回归的基础上，通过引入参数的先验分布，采用贝叶斯推断框架进行参数估计和不确定性量化。
+
+#### 模型设定
+
+设 $y_1, \ldots, y_n$ 为随机样本，其中 $y_i \sim B(\mu_i, \phi)$，$i=1, \ldots, n$。似然函数保持不变：
+
+$$
+f(y; \mu, \phi) = \frac{\Gamma(\phi)}{\Gamma(\mu \phi) \Gamma((1-\mu) \phi)} y^{\mu \phi - 1} (1-y)^{(1-\mu) \phi - 1}, \quad 0 < y < 1
+$$
+
+回归结构为：
+$$
+g(\mu_i) = x_i^\top \beta = \eta_i
+$$
+
+#### 先验分布设定
+
+对于回归参数 $\beta$ 和精度参数 $\phi$，需要指定先验分布：
+
+**回归系数的先验分布：**
+$$
+\beta \sim \mathcal{N}_k(\beta_0, \Sigma_0)
+$$
+其中 $\beta_0$ 为 $k \times 1$ 先验均值向量，$\Sigma_0$ 为 $k \times k$ 先验协方差矩阵。常用选择包括：
+- 无信息先验：$\beta_0 = \mathbf{0}$，$\Sigma_0 = \tau^2 I_k$，其中 $\tau^2$ 为大方差
+- 信息先验：基于历史数据或专家知识设定
+
+**精度参数的先验分布：**
+$$
+\phi \sim \text{Gamma}(a, b)
+$$
+其中 $a > 0, b > 0$ 为形状和率参数。或者采用：
+$$
+\log(\phi) \sim \mathcal{N}(\mu_\phi, \sigma_\phi^2)
+$$
+
+#### 后验推断
+
+根据贝叶斯定理，参数的后验分布正比于似然函数与先验分布的乘积：
+
+$$
+p(\beta, \phi | \mathbf{y}) \propto L(\beta, \phi | \mathbf{y}) \times p(\beta) \times p(\phi)
+$$
+
+其中似然函数为：
+$$
+L(\beta, \phi | \mathbf{y}) = \prod_{i=1}^n f(y_i; \mu_i, \phi) = \prod_{i=1}^n \frac{\Gamma(\phi)}{\Gamma(\mu_i \phi) \Gamma((1-\mu_i) \phi)} y_i^{\mu_i \phi - 1} (1-y_i)^{(1-\mu_i) \phi - 1}
+$$
+
+由于后验分布通常无解析形式，需要采用数值方法：MCMC方法：Metropolis-Hastings算法、Gibbs采样（当条件后验分布已知时）、 HMC；变分贝叶斯推断：平均场变分推断、随机变分推断。
+
+#### 可变分散贝叶斯Beta回归模型
+
+在可变分散设定下，$y_i \sim B(\mu_i, \phi_i)$，独立 $i=1, \ldots, n$，且：
+
+$$
+g_1(\mu_i) = \eta_{1i} = x_i^\top \beta, \quad g_2(\phi_i) = \eta_{2i} = z_i^\top \gamma
+$$
+
+**先验分布设定：**
+$$
+\beta \sim \mathcal{N}_k(\beta_0, \Sigma_{\beta}), \quad \gamma \sim \mathcal{N}_h(\gamma_0, \Sigma_{\gamma})
+$$
+
+**后验分布：**
+$$
+p(\beta, \gamma | \mathbf{y}) \propto L(\beta, \gamma | \mathbf{y}) \times p(\beta) \times p(\gamma)
+$$
+
+#### 模型比较与选择
+
+贝叶斯框架下的模型比较可通过以下准则：偏差信息准则（DIC）广义信息准则（WAIC）和 Leave-one-out交叉验证（LOO-CV），贝叶斯因子
+对于模型 $M_1$ 和 $M_2$，贝叶斯因子为：
+$$
+\text{BF}_{12} = \frac{p(\mathbf{y}|M_1)}{p(\mathbf{y}|M_2)} = \frac{\int L(\beta, \phi | \mathbf{y}, M_1) p(\beta, \phi | M_1) d\beta d\phi}{\int L(\beta, \phi | \mathbf{y}, M_2) p(\beta, \phi | M_2) d\beta d\phi}
+$$
+
+#### 预测推断
+
+对于新观测 $y_{\text{new}}$，后验预测分布为：
+$$
+p(y_{\text{new}} | \mathbf{y}, x_{\text{new}}) = \int f(y_{\text{new}} | \mu_{\text{new}}, \phi) p(\beta, \phi | \mathbf{y}) d\beta d\phi
+$$
+
+其中 $\mu_{\text{new}} = g^{-1}(x_{\text{new}}^\top \beta)$。
+
+#### 残差分析
+
+贝叶斯框架下，可计算后验预测残差：
+$$
+r_i^{\text{post}} = y_i - E[\mu_i | \mathbf{y}]
+$$
+
+以及标准化后验预测残差：
+$$
+r_{i,\text{std}}^{\text{post}} = \frac{y_i - E[\mu_i | \mathbf{y}]}{\sqrt{\text{Var}[\mu_i | \mathbf{y}] + E[\text{Var}(y_i | \mu_i, \phi) | \mathbf{y}]}}
+$$
+
+这种贝叶斯方法能够自然地量化参数估计的不确定性，提供更加全面的统计推断。
+
+### 数据
+澳大利亚儿童阅读准确性数据集提供44名儿童进行的阅读准确性测试的分数，用于评估非言语智商对阅读障碍与非阅读障碍儿童阅读技能影响的数据。
+```{r}
+data("ReadingSkills", package = "betareg")
+var_desc <- data.frame(
+  变量名 = names(ReadingSkills),
+  描述 = c(
+    "准确性 数值型阅读得分最大值限制为0.99而非1",
+    "阅读障碍 因子型该儿童是否患有阅读障碍",
+    "数值型 非语言智商转换为z分数",
+    "准确性1 数值型无限制阅读得分，最大值为1"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### brms实现
+```{r}
+readingskills_brms <- brm(
+  bf(accuracy ~ dyslexia * iq,
+     phi ~ dyslexia + iq),  # phi参数对应betareg中的precision参数
+  data = ReadingSkills,  family = Beta(),
+  chains = 4,  iter = 2000,  cores = 4,,refresh = 0,silent=TRUE)
+# 查看模型系数摘要
+summary(readingskills_brms)
+```
+
+这个Beta回归分析了阅读准确率与阅读障碍和智商的关系。均值模型部分：阅读障碍显著降低准确率（系数-0.74，p<0.001），智商显著提高准确率（系数0.49，p<0.01）。关键的交互效应表明，对于有阅读障碍的学生，智商的积极作用会显著减弱（交互系数-0.58，p<0.001），说明阅读障碍削弱了智商对阅读表现的保护作用。精度模型部分有阅读障碍的学生表现出更高的精度参数（系数1.75，p<0.001），意味着他们的准确率变异性更小、更集中；智商越高的学生准确率也更稳定（系数1.23，p<0.01）。模型整体：伪R²为0.58，表明模型解释了约58%的变异，拟合效果良好。这些发现揭示了阅读障碍不仅直接影响阅读水平，还会限制智商优势的发挥。
+
+### inlabru实现
+```{r}
+readingskills_inlabru <- bru(
+  components =accuracy ~ dyslexia_effect(main=dyslexia, model = "factor_contrast") + 
+    iq_effect(main=iq, model = "linear"),
+  formula=accuracy ~ dyslexia_effect+iq_effect,
+  family = "beta",
+  data = ReadingSkills,
+  options = list(
+    control.compute = list(dic = TRUE, waic = TRUE)
+  )
+)
+
+# 查看结果摘要
+summary(readingskills_inlabru)
+readingskills_inlabru$summary.random$dyslexia_effect
+```
+
+：IQ对阅读准确性具有显著的正向影响（回归系数均值=0.696，95%CI：0.295-1.084），表明智商越高，阅读准确性越好；而患有阅读障碍的个体其阅读准确性显著下降（效应均值=0.716，95%CI：0.066-1.357）。
+
+```{r}
+#交互作用
+readingskills_inlabru_inter <- bru(
+  components = accuracy ~ dyslexia_effect(main=dyslexia, model = "factor_contrast") + 
+    iq_effect(main=iq, model = "linear") +
+    interaction_effect(main=interaction(dyslexia, iq), model = "factor_contrast"),
+  formula = accuracy ~ dyslexia_effect + iq_effect + interaction_effect,
+  family = "beta",
+  data = ReadingSkills,
+  options = list(
+    control.compute = list(dic = TRUE, waic = TRUE)
+  )
+)
+
+# 查看结果摘要
+summary(readingskills_inlabru_inter)
+readingskills_inlabru_inter$summary.random$dyslexia_effect
+readingskills_inlabru_inter$summary.random$interaction_effect
+```
+
+交互作用的模型结果显示了更复杂但更符合实际情况的关系模式。与简单主效应模型相比，交互模型揭示了阅读障碍和智商之间存在显著的交互效应。智商的主效应变为负值（均值=-8.483），但这需要结合交互项来理解，因为智商对阅读准确性的实际影响取决于是否患有阅读障碍。从交互效应的结果可以看出，对于非阅读障碍者，高智商显著提升阅读准确性（如no.1.856组效应为18.95），而对于阅读障碍患者，智商的保护作用相对较弱。模型的拟合度显著改善（DIC从-18.40降至-37.85，WAIC从-19.05降至-42.84），但模型复杂度也大幅增加（有效参数数从3个增至19-30个）。这表明阅读障碍和智商的交互作用是理解阅读能力差异的关键因素，简单的线性叠加无法充分解释两者的复合影响。

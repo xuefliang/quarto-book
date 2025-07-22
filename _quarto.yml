@@ -1,0 +1,91 @@
+project:
+  type: book
+  output-dir: _book
+
+lang: zh
+
+prefer-html: true
+bibliography: references.bib
+csl: chinese-gb7714-2005-numeric.csl
+
+book:
+  title: "贝叶斯统计"
+  author: "梁雪枫"
+  date: "07/07/2025"
+  output-file: "贝叶斯统计"
+  page-navigation: true
+  chapters:
+    - index.qmd
+    - charpter01-贝叶斯统计基础.qmd
+    - charpter02-线性模型.qmd
+    - charpter03-广义线性模型.qmd
+    - charpter04-线性混合模型.qmd
+    - charpter05-可加与广义可加模型.qmd
+    - charpter06-生存模型.qmd
+    - charpter07-层级模型.qmd
+    - charpter08-空间模型.qmd
+    - charpter09-时间模型.qmd
+    - charpter10-时空模型.qmd
+    - charpter11-贝叶斯网络.qmd
+    - charpter12-inlabru包.qmd
+    - charpter13-modeltime包.qmd
+    - charpter14-rjas包.qmd
+    - charpter15-CmdStanR包.qmd
+    - charpter16-RStan包.qmd
+    - charpter17-rstanarm包.qmd
+    - charpter18-MCMCpack包.qmd
+    - charpter19-fdmr包.qmd
+    - charpter20-R2OpenBUGS包.qmd
+    - references.qmd
+  appendices:
+    - appendix-a.qmd
+    - appendix-b.qmd
+  repo-branch: main
+  search: true
+
+crossref:
+  chapters: true
+  fig-title: 图
+  tbl-title: 表
+  title-delim: —
+  tbl-prefix: 表
+  fig-prefix: 图
+
+format:
+  html:
+    theme: cosmo
+    code-link: true
+    code-line-numbers: true
+    include-in-header:
+      - header.html
+  pdf:
+    documentclass: book
+    include-in-header: preamble.tex
+    classoption: [UTF8,twoside,openany,table]
+    keep-tex: true
+    lof: true
+    lot: true
+    geometry:
+      - tmargin=2.5cm
+      - bmargin=2.5cm
+      - lmargin=3.0cm
+      - rmargin=2.0cm
+    highlight-style: github
+    number-sections: true
+    top-level-division: chapter
+    colorlinks: true
+    mathspec: true
+    link-citations: true
+    page-breaks-before: [chapter]
+    crossref:
+      chapters: true
+  docx:
+    toc: true
+    toc-depth: 2
+    page-breaks-before: [chapter]
+    number-sections: true
+    crossref:
+      chapters: true
+    highlight-style: tango
+
+editor: source

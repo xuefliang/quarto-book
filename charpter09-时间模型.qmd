@@ -1,0 +1,366 @@
+# 时间模型 
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+## 自回归模型
+
+### 标准自回归模型 AR(p)
+
+**理论原理**：
+自回归(Autoregressive)模型是时间序列分析中最基础的模型之一，其核心思想是当前观测值可以由过去p个时间点的观测值线性组合来预测。AR(p)模型假设时间序列的当前值与其滞后值之间存在线性相关关系，并且误差项服从白噪声过程。该模型特别适用于具有"记忆性"的时间序列，即当前值受到过去值持续影响的数据。
+
+**数学描述**：
+AR(p)模型可以表示为：
+
+$$
+X_t = c + \sum_{i=1}^{p} \phi_i X_{t-i} + \varepsilon_t
+$$
+
+其中：
+- $X_t$ 是t时刻的时间序列值
+- $c$ 是常数项（截距）
+- $\phi_i$ 是自回归系数，$i = 1, 2, ..., p$
+- $p$ 是阶数，表示模型考虑的滞后项数
+- $\varepsilon_t$ 是白噪声误差项，满足 $\varepsilon_t \sim WN(0, \sigma^2)$
+
+AR模型的平稳性条件要求特征方程：
+$$1 - \phi_1 z - \phi_2 z^2 - ... - \phi_p z^p = 0$$
+的所有根的模都大于1，或等价地，所有根都在单位圆外。
+
+### 向量自回归模型 VAR
+
+**理论原理**：
+向量自回归(Vector Autoregressive)模型是AR模型的多变量扩展，它能同时建模多个相互关联的时间序列。VAR模型捕捉了不同变量之间的动态关系，每个变量不仅受自身历史值的影响，还受到其他变量历史值的影响。VAR模型在宏观经济学和金融计量中应用广泛，特别适用于研究变量间的相互作用和冲击传导机制。
+
+**数学描述**：
+p阶VAR模型，记为VAR(p)，可表示为：
+
+$$
+\mathbf{Y}_t = \mathbf{c} + \mathbf{A}_1 \mathbf{Y}_{t-1} + \mathbf{A}_2 \mathbf{Y}_{t-2} + ... + \mathbf{A}_p \mathbf{Y}_{t-p} + \mathbf{\varepsilon}_t
+$$
+
+其中：
+- $\mathbf{Y}_t$ 是k×1维的内生变量向量
+- $\mathbf{c}$ 是k×1维的常数向量
+- $\mathbf{A}_i$ 是k×k维的系数矩阵，$i = 1, 2, ..., p$
+- $\mathbf{\varepsilon}_t$ 是k×1维的误差向量，满足$E(\mathbf{\varepsilon}_t) = \mathbf{0}$，$E(\mathbf{\varepsilon}_t \mathbf{\varepsilon}_t') = \mathbf{\Sigma}$（协方差矩阵），$E(\mathbf{\varepsilon}_t \mathbf{\varepsilon}_s') = \mathbf{0}$对所有$t \neq s$
+
+VAR模型的平稳性条件为特征多项式：
+$$\det(I_k - \mathbf{A}_1 z - \mathbf{A}_2 z^2 - ... - \mathbf{A}_p z^p) = 0$$
+的所有根的模都大于1。
+
+### ARIMA(p,d,q)模型
+
+**理论原理**：
+自回归综合移动平均(Autoregressive Integrated Moving Average)模型结合了自回归(AR)、差分(I)和移动平均(MA)三个组件，用于分析非平稳时间序列。其中，差分操作将非平稳序列转化为平稳序列，AR部分捕捉序列的自相关性，MA部分捕捉误差项的相关性。ARIMA模型在经济、金融和需求预测中有广泛应用，特别适合具有趋势和季节性的数据。
+
+**数学描述**：
+ARIMA(p,d,q)模型的数学表达式为：
+
+$$
+\phi(B)(1-B)^d X_t = \theta(B)\varepsilon_t
+$$
+
+其中：
+- $B$ 是滞后算子，定义为 $BX_t = X_{t-1}$
+- $(1-B)^d$ 表示d阶差分
+- $\phi(B) = 1 - \phi_1 B - \phi_2 B^2 - ... - \phi_p B^p$ 是AR多项式
+- $\theta(B) = 1 + \theta_1 B + \theta_2 B^2 + ... + \theta_q B^q$ 是MA多项式
+- $\varepsilon_t$ 是白噪声过程
+
+展开后可表示为：
+
+$$
+X_t = c + \sum_{i=1}^{p} \phi_i X_{t-i} + \sum_{j=1}^{q} \theta_j \varepsilon_{t-j} + \varepsilon_t
+$$
+
+其中$X_t$实际上是原始序列经过d次差分后的序列。
+
+### 门限自回归模型 TAR
+
+**理论原理**：
+门限自回归(Threshold Autoregressive)模型是一种非线性时间序列模型，它假设系统在不同"状态"或"机制"下具有不同的动态特性，状态转换由观测序列的历史值与设定的门限值比较决定。TAR模型能够捕捉时间序列中的非对称性、限制性和多种模式的动态行为，特别适用于具有结构突变或机制转换的经济和金融数据。
+
+**数学描述**：
+一个两机制的TAR模型可表示为：
+
+$$
+X_t = 
+\begin{cases}
+\phi_0^{(1)} + \sum_{i=1}^{p_1} \phi_i^{(1)} X_{t-i} + \varepsilon_t^{(1)}, & \text{if } X_{t-d} \leq r \\
+\phi_0^{(2)} + \sum_{i=1}^{p_2} \phi_i^{(2)} X_{t-i} + \varepsilon_t^{(2)}, & \text{if } X_{t-d} > r
+\end{cases}
+$$
+
+其中：
+- $r$ 是门限值
+- $d$ 是门限滞后参数
+- $p_1, p_2$ 分别是两个机制中的自回归阶数
+- $\phi_i^{(j)}$ 是第j个机制的自回归系数
+- $\varepsilon_t^{(j)}$ 是第j个机制的白噪声误差，$j = 1, 2$
+
+更一般地，对于m个机制的TAR模型：
+
+$$
+X_t = \phi_0^{(j)} + \sum_{i=1}^{p_j} \phi_i^{(j)} X_{t-i} + \varepsilon_t^{(j)}
+$$
+
+当 $r_{j-1} < X_{t-d} \leq r_j$，其中 $j = 1,2,...,m$，$r_0 = -\infty$，$r_m = \infty$。
+
+### GARCH模型
+
+**理论原理**：
+广义自回归条件异方差(Generalized Autoregressive Conditional Heteroskedasticity)模型扩展了ARCH模型，用于描述金融时间序列中常见的波动率聚集现象。GARCH模型假设当前条件方差不仅取决于过去观测值的平方，还取决于过去条件方差本身，这使得模型能够以更少的参数捕捉长期波动率持续性。GARCH模型广泛应用于风险管理、期权定价和波动率预测。
+
+**数学描述**：
+GARCH(p,q)模型可表示为：
+
+$$
+\begin{align}
+X_t &= \mu_t + \varepsilon_t \\
+\varepsilon_t &= \sigma_t z_t \\
+\sigma_t^2 &= \alpha_0 + \sum_{i=1}^{q} \alpha_i \varepsilon_{t-i}^2 + \sum_{j=1}^{p} \beta_j \sigma_{t-j}^2
+\end{align}
+$$
+
+其中：
+- $\mu_t$ 是条件均值，可以是常数或时间序列模型
+- $\varepsilon_t$ 是残差
+- $z_t$ 是独立同分布的随机变量，通常假设为标准正态分布
+- $\sigma_t^2$ 是条件方差
+- $\alpha_0 > 0$, $\alpha_i \geq 0$ ($i = 1,...,q$), $\beta_j \geq 0$ ($j = 1,...,p$)
+
+为保证方差过程的平稳性，需要满足：
+
+$$
+\sum_{i=1}^{q} \alpha_i + \sum_{j=1}^{p} \beta_j < 1
+$$
+
+GARCH(1,1)是实践中最常用的形式，简化为：
+
+$$
+\sigma_t^2 = \alpha_0 + \alpha_1 \varepsilon_{t-1}^2 + \beta_1 \sigma_{t-1}^2
+$$
+
+通过递归替换，GARCH(1,1)的条件方差可以表示为过去所有残差平方的加权平均：
+
+$$
+\sigma_t^2 = \frac{\alpha_0}{1-\alpha_1-\beta_1} + \alpha_1 \sum_{i=1}^{\infty} \beta_1^{i-1} \varepsilon_{t-i}^2
+$$
+
+其中$\frac{\alpha_0}{1-\alpha_1-\beta_1}$是无条件方差。
+
+### 数据
+AirPassengers 数据集包含了从 1949 年到 1960 年的每月国际航空乘客总数。这是一个时间序列数据集，意味着它包含在一段时间内（在这种情况下为每月）以固定间隔收集的数据点。数据集仅包含一个变量，表示以千为单位的国际航空乘客数量。
+```{r}
+data(AirPassengers,package = 'datasets')
+AirPassengers |> 
+  as_tibble() |> 
+  rename('numbers' = 'x') |> 
+  mutate(
+    numbers = as.numeric(numbers),
+    year = rep(1949:1960, each = 12),
+    month = rep(1:12, 12),
+    time = 1:n() 
+  ) -> AirPassengers
+```
+
+```{r}
+cmp <- numbers ~
+  Intercept(1) +
+  trend(year, model = 'ar1',
+        hyper = list(
+          prec = list(prior = "pc.prec", param = c(1, 0.01)),
+          rho = list(prior = "pc.cor1", param = c(0.7, 0.7))
+        )) +
+  seasonal(month, model = 'seasonal', season.length = 12,
+           hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01))))
+
+airPassengers_ar <- bru(cmp, data = AirPassengers, family = "gaussian",
+                       control.family = list(
+                         hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+                       ))
+summary(airPassengers_ar)
+```
+
+year趋势AR1相关系数(Rho)：-0.955非常接近1，说明年度趋势有很强的自相关性。除AR模型外，还可使用带PC先验的1阶段随机游走模型。
+
+```{r}
+# 带PC先验
+cmp <- numbers ~ 
+  Intercept(1) + 
+  trend(year, 
+        model = 'rw2',
+        hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
+  seasonal(month, 
+           model = 'seasonal', 
+           season.length = 12,
+           hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01))))
+
+airPassengers_rw <- bru(
+  cmp, 
+  data = AirPassengers,
+  family = "gaussian",
+  control.family = list(
+    hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+  )
+)
+summary(airPassengers_rw)
+```
+
+使用airPassengers_ar模型对1961年每月国际航空乘客总数进行预测。
+```{r}
+future_data <- data.frame(
+  year = rep(1961, 12),
+  month = 1:12,
+  time = 145:156
+)
+
+predictions <- predict(airPassengers_ar, 
+                      newdata = future_data, 
+                      ~ c(Intercept + trend + seasonal))
+
+ggplot(predictions, aes(x = month)) +
+  geom_line(aes(y = mean, color = "预测值"), linewidth = 1) +
+  geom_ribbon(aes(ymin = `q0.025`, ymax = `q0.975`), alpha = 0.3) +
+  labs(title = "航空乘客数量：预测值",
+       x = "时间", 
+       y = "乘客数量",
+       color = "图例") +
+  theme_minimal()
+```
+
+## 非高斯模型
+
+### 数据
+earthquake 数据集记录了1900-2006年每年7级及以上的地震次数。
+```{r}
+earthquake <- readRDS('data/earthquake.rds')
+earthquake |> 
+  mutate(year=1900:2006) -> earthquake
+
+var_desc <- data.frame(
+  变量名 = names(earthquake),
+  描述 = c(
+    "7级及以上的地震次数",
+    "年份"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+使用1阶随机游走模型拟合该数据，因为地震次数符合poisson分布，需要设置family='poisson'
+```{r}
+cmp <- number ~ 1 + year(year,model='rw1')
+earthquake_rw <- bru(cmp,data=earthquake,family='poisson')
+summary(earthquake_rw)
+```
+
+年份随机效应的精度82.48较高，意味着相邻年份间的变异相对较小，表明地震数量的年际变化相对平稳。截距项的后验均值为2.922，在对数尺度上，这对应着 exp(2.922) ≈ 18.6 的基准地震数量，95%CI相对较窄，表明估计较为精确。
+
+## 状态空间模型
+
+状态空间模型允许系数及其他潜在效应随时间变化，潜在效应用具有大方差的iid分布进行建模。
+
+### 数据
+数据集包含从 1983 年到 1997 年美国 51 个州每年的交通事故死亡人数和其他相关变量。在此期间，许多州通过了关于强制使用座椅安全带的法律。我们区分两种类型的法律：次级执行法律和初级执行法律。次级执行意味着警方只有在因其他违法行为被拦截时才能对违规者罚款，而初级执行则允许警方根据座椅安全带使用违规行为本身进行拦截和罚款。此数据集名为 SeatBelt，可以
+
+```{r}
+library(dynamite)
+data("SeatBelt", package = "pder")
+
+SeatBelt <- SeatBelt |>
+  mutate(
+    miles = (vmturban + vmtrural) / 10000,
+    log_miles = log(miles),
+    fatalities = farsocc,
+    income10000 = percapin / 10000,
+    law = factor(
+      case_when(
+        dp == 1 ~ "primary",
+        dsp == 1 ~ "primary",
+        ds == 1 & dsp == 0 ~ "secondary",
+        TRUE ~ "no_law"
+      ),
+      levels = c("no_law", "secondary", "primary")
+    )
+  )
+```
+
+想研究安全带法律如何通过影响安全带使用率来减少车内乘员的交通死亡事故。为此，建立了一个联合模型，同时分析安全带使用率和死亡人数。我们用$\beta$分布来模拟安全带使用率，假设使用率受到安全带法律力度、州级效应（用随机截距建模）以及整体随时间变化的趋势（用样条曲线建模）的影响，这能捕捉美国安全带使用普遍趋势的变化。用负二项分布来模拟死亡人数，以总行驶里程作为偏移量。除了安全带使用率和州级随机截距外，还加入了交通密度、限速、酒精使用和收入等多个控制变量。首先构建模型公式，定义响应变量的分布、每个变量的协变量以及用于时间变化效应的样条曲线：使用 random(~1) 来定义群体特定的随机效应，varying(~1) 来定义随时间变化的截距项，splines(df = 10) 来定义随时间变化截距的样条曲线的自由度。
+
+```{r}
+seatbelt_formula <-
+  obs(usage ~ -1 + law + random(~1) + varying(~1), family = "beta") +
+  obs(
+    fatalities ~ usage + densurb + densrur +
+      bac08 + mlda21 + lim65 + lim70p + income10000 + unemp + fueltax +
+      random(~1) + offset(log_miles),
+    family = "negbin"
+  ) +
+  splines(df = 10)
+
+fit <- dynamite(
+  dformula = seatbelt_formula,
+  data = SeatBelt, time = "year", group = "state",
+  chains = 4, refresh = 0
+)
+
+summary(fit, types = "beta", response = "usage") |>
+  select(parameter, mean, sd, q5, q95)
+```
+
+通过 summary() 方法提取估计的系数，结果显示二级执法和一级执法的安全带法律都有明显的正向效应。通过 fitted() 方法估计了边际均值，该方法返回给定协变量下每个时间点响应变量期望值的后验样本。为此，我们为法律力度的每个级别创建一个新的数据框，并假设每个州都执行该特定法律。然后使用这些数据调用 fitted()，计算各州的后验样本平均值，最后计算总体平均值
+
+```{r}
+seatbelt_new <- SeatBelt
+seatbelt_new$law[] <- "no_law"
+pnl <- fitted(fit, newdata = seatbelt_new)
+seatbelt_new$law[] <- "secondary"
+psl <- fitted(fit, newdata = seatbelt_new)
+seatbelt_new$law[] <- "primary"
+ppl <- fitted(fit, newdata = seatbelt_new)
+bind_rows(no_law = pnl, secondary = psl, primary = ppl, .id = "law") |>
+  mutate(
+    law = factor(law, levels = c("no_law", "secondary", "primary"))
+  ) |>
+  group_by(law, .draw) |>
+  summarize(mm = mean(usage_fitted)) |>
+  group_by(law) |>
+  summarize(
+    mean = mean(mm),
+    q5 = quantile(mm, 0.05),
+    q95 = quantile(mm, 0.95)
+  )
+```
+
+过比较各州每年总死亡人数的差异，并利用 fitted() 方法对各年份取平均值来实现这一分析
+
+```{r}
+seatbelt_new <- SeatBelt
+seatbelt_new$usage[] <- 0.68
+p68 <- fitted(fit, newdata = seatbelt_new)
+seatbelt_new$usage[] <- 0.90
+p90 <- fitted(fit, newdata = seatbelt_new)
+bind_rows(low = p68, high = p90, .id = "usage") |>
+  group_by(year, .draw) |>
+  summarize(
+    s = sum(
+      fatalities_fitted[usage == "low"] -
+        fatalities_fitted[usage == "high"]
+    )
+  ) |>
+  group_by(.draw) |>
+  summarize(m = mean(s)) |>
+  summarize(
+    mean = mean(m),
+    q5 = quantile(m, 0.05),
+    q95 = quantile(m, 0.95)
+  )
+```
+
+模型没有包含任何滞后响应变量作为协变量，因此使用 fitted() 方法为每个时间点独立计算预测就足够了。

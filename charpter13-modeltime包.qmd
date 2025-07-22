@@ -1,0 +1,174 @@
+# modeltime包
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(modeltime)
+library(xgboost)
+library(tidymodels)
+library(timetk)
+```
+
+## 数据
+```{r}
+bike_transactions_tbl <- read.csv("data/day.csv")  |>
+  mutate(dteday=ymd(dteday))  |> 
+  select(date = dteday, value = cnt)
+
+var_desc <- data.frame(
+  变量名 = names(bike_transactions_tbl),
+  描述 = c(
+    "日期",
+    "数值"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+## 绘图
+```{r}
+bike_transactions_tbl  |>
+  plot_time_series(date, value, .interactive = F)
+```
+
+
+使用 initial_time_split()将数据分为训练集和测试集
+```{r}
+splits <- initial_time_split(bike_transactions_tbl, prop = 0.8)
+```
+
+### 创建并拟合多个模型
+
+ARIMA 模型
+```{r}
+set.seed(1234)
+model_fit_arima_no_boost <- arima_reg()  |>
+  set_engine(engine = "auto_arima")  |>
+  fit(value ~ date, data = training(splits))
+```
+
+
+Boosted ARIMA模型
+```{r}
+set.seed(1234)
+model_fit_arima_boosted <- arima_boost(
+  min_n = 2,
+  learn_rate = 0.015
+)  |>
+  set_engine(engine = "auto_arima_xgboost")  |>
+  fit(value ~ date + as.numeric(date) + factor(month(date, label = TRUE), ordered = FALSE),
+      data = training(splits))
+```
+
+指数平滑模型
+```{r}
+set.seed(1234)
+model_fit_ets <- exp_smoothing()  |>
+  set_engine(engine = "ets")  |>
+  fit(value ~ date, data = training(splits))
+```
+
+Prophet模型
+```{r}
+set.seed(1234)
+model_fit_prophet <- prophet_reg()  |>
+  set_engine(engine = "prophet")  |>
+  fit(value ~ date, data = training(splits))
+```
+
+线性回归模型
+```{r}
+set.seed(1234)
+model_fit_lm <- linear_reg()  |>
+  set_engine("lm")  |>
+  fit(value ~ as.numeric(date) + factor(month(date, label = TRUE), ordered = FALSE),
+      data = training(splits))
+```
+
+随机森林模型
+```{r}
+set.seed(1234)
+model_fit_RF <- rand_forest(mode="regression",trees = 500, min_n = 50)  |>
+  set_engine("randomForest")   |>
+  fit(value ~ date + as.numeric(date) + factor(month(date, label = TRUE), ordered = FALSE),
+      data = training(splits))
+```
+
+多元自适应回归样条模型（Multivariate Adaptive Regression Splines，MARS）
+```{r}
+# 修改了流程以标准化向机器学习模型（mars）提供的特征预处理过程
+model_spec_mars <- mars(mode = "regression")  |>
+    set_engine("earth") 
+
+recipe_spec <- recipe(value ~ date, data = training(splits))  |>
+    step_date(date, features = "month", ordinal = FALSE)  |>
+    step_mutate(date_num = as.numeric(date))  |>
+    step_normalize(date_num)  |>
+    step_rm(date)
+  
+model_fit_mars <- workflow()  |>
+    add_recipe(recipe_spec)  |>
+    add_model(model_spec_mars)  |>
+    fit(training(splits))
+```
+
+
+拟合模型添加到模型表中
+```{r}
+models_tbl <- modeltime_table(
+  model_fit_arima_no_boost,
+  model_fit_arima_boosted,
+  model_fit_ets,
+  model_fit_prophet,
+  model_fit_lm,
+  model_fit_RF,
+  model_fit_mars)
+
+# View table
+models_tbl
+```
+
+使用测试数据集校准模型，校准添加了一个新列，.calibration_data，其中包含测试预测和残差。校准是确定CI和准确度指标的方法，校准数据即基于样本外数据计算的预测值及残差，校准完成后，校准数据会随预测流程中的其他数据一同传递。
+```{r}
+calibration_tbl <- models_tbl  |>
+  modeltime_calibrate(new_data = testing(splits)) #Using the testing() dataset.
+
+calibration_tbl
+```
+
+使用测试集进行预测和绘图
+```{r}
+calibration_tbl  |>
+  modeltime_forecast(
+    new_data    = testing(splits),
+    actual_data = bike_transactions_tbl
+  )  |>
+  plot_modeltime_forecast(
+    .legend_max_width = 25, # For mobile screens
+    .interactive  = FALSE)
+```
+
+时间序列预测模型的准确性评估。可以使用 modeltime_accuracy() 来收集常用 准确性指标。默认报告使用以下指标：
+mae() - 平均绝对误差，MAPE - 平均绝对百分比误差， MASE - 平均绝对缩放误差， SMAPE - 对称平均绝对百分比误差， RMSE - 平均平方根误差， RSQ - 确定系数,。从准确度指标来看：线性回归（LM）模型结果较优，其平均绝对误差为 1147.56
+```{r}
+# Accuracy Metrics ----
+calibration_tbl  |>
+  modeltime_accuracy()  |>
+  table_modeltime_accuracy(.interactive = FALSE)
+```
+
+将训练好的模型重新拟合到实际数据集，并进行前向预测（一年）
+```{r}
+refit_tbl <- calibration_tbl  |>
+  modeltime_refit(data = bike_transactions_tbl) 
+
+refit_tbl  |>
+  modeltime_forecast(h = "1 year", actual_data = bike_transactions_tbl)  |>
+  plot_modeltime_forecast(
+    .legend_max_width = 25, # For mobile screens
+    .interactive  = F)
+```
+
+由于重新拟合，所有模型都发生了变化。LM模型现在看起来要好得多，因为线性趋势线现在已被拟合到遵循长期趋势的新数据上。PROPHET 模型的趋势更能代表实际趋势。

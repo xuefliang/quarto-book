@@ -1,0 +1,753 @@
+# fdmr包
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(fdmr)
+library(fmesher)
+```
+
+fdmr包旨在为用户提供工具，用于拟合贝叶斯层次模型(BHM)并可视化结果，特别适用于分析时空数据。本指南将详细介绍如何使用fdmr包进行数据预处理、模型构建、拟合、结果解释和可视化。我们将使用 COVID-19 感染数据和水文数据等实际案例来阐明整个过程。
+
+## 数据准备
+
+运行 fdmr包中的贝叶斯层次模型需要特定的数据格式。使用的核心数据对象类型是 data.frame，其中每行代表一次数据观测。
+
+### 数据结构
+
+数据框应包含以下核心列：响应变量列：表示模型的结果或因变量。时间点索引列：指示每次观测数据收集的时间点，通常是从1开始的整数 (例如，week 或 time)。地理坐标列：通常是两列，表示每次观测的空间位置 (例如，LONG 和 LAT 或 x 和y)。协变量列：如果模型包含协变量，则每个协变量应存储在数据框的单独一列中。用户可以使用任何变量名，只要确保它们与定义模型公式时使用的名称一致。
+
+根据响应变量的数据类型(如高斯或泊松分布)，数据框中可能还需要包含其他变量。例如，响应变量遵循泊松分布，数据框中会包含一列作为泊松模型的暴露参数。
+
+### 数据获取
+
+fdmr包提供了方便的函数来获取和加载教程数据集：retrieve_tutorial_data()：用于从 fdmr示例数据存储库中检索和解压缩数据。load_tutorial_data()：用于加载教程数据。数据也可以从CSV文件导入(utils::read.csv())或从.rds文件加载。在加载CSV时，需要确保经纬度列的命名符合预期或在函数调用中明确指定。
+
+## 贝叶斯层次模型 (BHM) 的核心概念
+
+fdmr包主要使用 INLA-SPDE 方法 来拟合贝叶斯层次模型。
+
+### 模型组成：固定效应与随机效应
+
+贝叶斯模型通常包含固定效应和随机效应。固定效应：指其值在某个位置是固定的，但与其不确定性相关的概率分布。它们代表模型中假设在不同观测/位置上具有固定、恒定值的参数或系数。如果认为无论观测环境如何，效应总是具有相同的结果，则应将其建模为固定效应。随机效应：指其值从概率分布中抽取的效应，并具有从其自身分布中抽取的相关不确定性。未观察过程的随机效应：这些是可能在空间或时间上分布的过程，但没有直接数据或理论描述它们。它们被视为数据中因某种未观察到的过程而非随机性导致的方差。例如，调整协变量后残余的时空自相关通常通过随机效应来建模。受观察过程约束的随机效应：观察数据可用于约束效应，使得 inla/inlabru 可用于执行数据驱动的反演，即估计不能直接观察的过程。
+
+#### 时空随机效应的建模
+
+在时空模型中，随机效应 $S(i,t)$ 通常分解为时间依赖部分和空间随机效应部分：$S(i,t) = \alpha \times S(i,t-1) + \omega(i,t)$，时间依赖参数 ($\alpha$)：$\alpha$ 取值在 $[-1, 1]$ 之间，控制时间依赖性。$\alpha=1$ 表示强时间依赖性（一阶随机游走），而 $\alpha=0$ 对应时间上的独立性。空间随机效应($\omega(i,t)$)：假设服从零均值高斯场，在时间上独立但在每个时间段内空间相关。
+
+#### Matérn 协方差函数与 SPDE 模型
+
+INLA-SPDE 方法通过创建三角剖分网格来离散化空间，并使用Matérn协方差函数来建模空间相关性。Matérn 协方差函数有三个超参数：$\sigma^2$：控制过程 $S(i,t)$ 的边际方差。 $\kappa$：控制空间相关范围，可定义为 $\rho = \frac{\sqrt{8\nu}}{\kappa}$。空间范围 ($\rho$)是两个值之间相关性接近 0.1 的距离。$\nu$：控制平滑度，较高的值导致过程更加光滑。
+
+## fdmr包的核心工作流程
+
+使用 fdmr包进行模型拟合通常遵循以下步骤：
+
+### 网格构建 (Triangulation Mesh)
+
+要实现INLA-SPDE方法，需要通过创建三角剖分网格来离散化空间，该网格在整个研究区域建立一组人工邻居。网格允许计算观测值之间的空间自相关性，其构建对模型推断和预测有影响。以下代码使用fmesher包中的经典方法:
+
+```{r}
+# 读取空间数据
+gs <- st_read('data/省.geojson') %>%
+  filter(省=='甘肃省') %>%
+  st_set_crs(4326)
+
+create_adaptive_mesh <- function(sf_object,
+                                 inner_edge_ratio = 30,    # 增大内部边长比例（更密集）
+                                 outer_edge_ratio = 5,     # 减小外部边长比例（更稀疏）
+                                 inner_offset_ratio = 8,   # 减小内部偏移比例（内部区域更大）
+                                 outer_offset_ratio = 20,  # 增大外部偏移比例（外部区域相对更小）
+                                 cutoff_ratio = 80,        # 增大cutoff比例（避免过小三角形）
+                                 crs_transform = NULL) {   # 可选的坐标转换
+
+  # 坐标系转换（如果需要）
+  if (!is.null(crs_transform)) {
+    sf_object <- st_transform(sf_object, crs_transform)
+  }
+
+  # 创建边界
+  boundary <- fm_as_segm(sf_object)
+
+  # 计算自适应参数
+  coords <- st_coordinates(sf_object)
+  lon_range <- diff(range(coords[, 1]))
+  lat_range <- diff(range(coords[, 2]))
+  mean_range <- mean(c(lon_range, lat_range))
+
+  # 关键修改：调整max.edge参数
+  # 第一个参数控制边界内部，第二个参数控制边界外部
+  inner_max_edge <- mean_range/inner_edge_ratio  # 内部：更小的边长 = 更密集
+  outer_max_edge <- mean_range/outer_edge_ratio  # 外部：更大的边长 = 更稀疏
+
+  # 创建mesh
+  mesh <- fm_mesh_2d(
+    boundary = boundary,
+    max.edge = c(inner_max_edge, outer_max_edge),  # 内部小，外部大
+    offset = c(mean_range/inner_offset_ratio, mean_range/outer_offset_ratio),
+    cutoff = mean_range/cutoff_ratio
+  )
+
+  # 打印网格信息
+  cat("网格参数信息:\n")
+  cat("- 内部最大边长:", round(inner_max_edge, 4), "\n")
+  cat("- 外部最大边长:", round(outer_max_edge, 4), "\n")
+  cat("- 密度比例 (外部/内部):", round(outer_max_edge/inner_max_edge, 2), "\n")
+  cat("- 顶点总数:", mesh$n, "\n")
+  cat("- 三角形总数:", nrow(mesh$graph$tv), "\n")
+
+  # 返回mesh和元信息
+  list(
+    mesh = mesh,
+    boundary = boundary,
+    range_info = c(lon_range = lon_range, lat_range = lat_range, mean_range = mean_range),
+    vertices_count = mesh$n,
+    triangles_count = nrow(mesh$graph$tv),
+    edge_ratio = outer_max_edge/inner_max_edge
+  )
+}
+
+# 创建mesh - 参数已经按照内密外疏原则设置
+mesh_result <- create_adaptive_mesh(
+  gs,
+  inner_edge_ratio = 35,   # 内部更密集（增大比例）
+  outer_edge_ratio = 4,    # 外部更稀疏（减小比例）
+  inner_offset_ratio = 6,  # 内部区域更大
+  outer_offset_ratio = 15, # 外部区域适中
+  cutoff_ratio = 100       # 避免过细小的三角形
+)
+
+mesh <- mesh_result$mesh
+
+plot(mesh)
+```
+
+使用fmesher::fm_mesh_2d_inla() 函数来构建网格。loc参数传递所有社区的位置作为初始网格节点。max.edge参数确定三角形的最大允许长度，较低的值导致更高的网格分辨率。可接受标量值或长度为2的向量（分别控制内部域和外部扩展）。offset：指定数据位置周围内部和外部扩展的大小，以避免边界效应。cutoff：定义观察点之间允许的最小距离，避免在非常接近的输入位置构建过多小三角形。fdmr提供了一个名为fdmr::mesh_builder的交互式网格构建工具，允许用户从空间数据构建网格，修改参数并在交互式地图上绘制网格和数据。
+
+```{r}
+#| echo: true
+#| eval: false
+boundary_coords <- st_coordinates(gs)
+boundary_df <- data.frame(
+  LONG = boundary_coords[,1],
+  LAT = boundary_coords[,2]
+)
+# 使用fdmr包构建网格
+fdmr::mesh_builder(spatial_data = boundary_df)
+```
+
+以下代码从几何质量、拓扑质量
+```{r}
+# 主评估函数
+comprehensive_mesh_assessment <- function(mesh, original_sf = NULL) {
+
+  # 基本信息
+  n_vertices <- nrow(mesh$loc)
+  n_triangles <- nrow(mesh$graph$tv)
+
+  # 1. 几何质量指标
+  geometric_quality <- assess_geometric_quality(mesh)
+
+  # 2. 拓扑质量指标
+  topological_quality <- assess_topological_quality(mesh)
+
+  # 3. 数值稳定性指标
+  numerical_quality <- assess_numerical_quality(mesh)
+
+  # 4. 应用特定指标（如果提供原始边界）
+  application_quality <- NULL
+  if (!is.null(original_sf)) {
+    application_quality <- assess_application_quality(mesh, original_sf)
+  }
+
+  # 综合得分 (0-100, 100最好)
+  overall_score <- calculate_overall_score(
+    geometric_quality, topological_quality, numerical_quality
+  )
+
+  return(list(
+    basic_info = list(
+      vertices = n_vertices,
+      triangles = n_triangles,
+      density = n_vertices / (max(mesh$loc[,1]) - min(mesh$loc[,1])) /
+        (max(mesh$loc[,2]) - min(mesh$loc[,2]))
+    ),
+    geometric = geometric_quality,
+    topological = topological_quality,
+    numerical = numerical_quality,
+    application = application_quality,
+    overall_score = overall_score,
+    quality_level = get_quality_level(overall_score)
+  ))
+}
+
+# 1. 几何质量评估
+assess_geometric_quality <- function(mesh) {
+  triangles <- mesh$graph$tv
+  vertices <- mesh$loc
+
+  # 计算每个三角形的几何属性
+  areas <- c()
+  aspect_ratios <- c()
+  min_angles <- c()
+  max_angles <- c()
+
+  for (i in 1:nrow(triangles)) {
+    # 获取三角形顶点
+    v1 <- vertices[triangles[i,1], ]
+    v2 <- vertices[triangles[i,2], ]
+    v3 <- vertices[triangles[i,3], ]
+
+    # 面积
+    area <- abs((v2[1]-v1[1])*(v3[2]-v1[2]) - (v3[1]-v1[1])*(v2[2]-v1[2])) / 2
+    areas <- c(areas, area)
+
+    # 边长
+    edge1 <- sqrt(sum((v2-v1)^2))
+    edge2 <- sqrt(sum((v3-v2)^2))
+    edge3 <- sqrt(sum((v1-v3)^2))
+
+    # 纵横比 (最长边/最短边)
+    aspect_ratio <- max(edge1, edge2, edge3) / min(edge1, edge2, edge3)
+    aspect_ratios <- c(aspect_ratios, aspect_ratio)
+
+    # 角度计算
+    angles <- calculate_triangle_angles(v1, v2, v3)
+    min_angles <- c(min_angles, min(angles))
+    max_angles <- c(max_angles, max(angles))
+  }
+
+  return(list(
+    area_stats = list(
+      mean = mean(areas),
+      cv = sd(areas) / mean(areas),  # 变异系数
+      min = min(areas),
+      max = max(areas),
+      uniformity_score = max(0, 1 - (sd(areas) / mean(areas)))  # 越接近1越均匀
+    ),
+    shape_quality = list(
+      mean_aspect_ratio = mean(aspect_ratios),
+      max_aspect_ratio = max(aspect_ratios),
+      aspect_ratio_score = max(0, min(1, 2 / mean(aspect_ratios))),  # 越接近1越好
+      min_angle_mean = mean(min_angles),
+      min_angle_worst = min(min_angles),
+      angle_quality_score = max(0, min(1, mean(min_angles) / 60))  # 理想最小角度60度
+    )
+  ))
+}
+
+# 2. 拓扑质量评估
+assess_topological_quality <- function(mesh) {
+  vertices <- mesh$loc
+  triangles <- mesh$graph$tv
+
+  # 计算每个顶点的度数（连接的三角形数量）
+  vertex_degrees <- table(as.vector(triangles))
+
+  # 边界检测
+  edges <- rbind(
+    triangles[, c(1,2)],
+    triangles[, c(2,3)],
+    triangles[, c(1,3)]
+  )
+  edge_counts <- table(paste(pmin(edges[,1], edges[,2]),
+                             pmax(edges[,1], edges[,2])))
+  boundary_edges <- sum(edge_counts == 1)
+  internal_edges <- sum(edge_counts == 2)
+  irregular_edges <- sum(edge_counts > 2)  # 不应该存在
+
+  return(list(
+    connectivity = list(
+      mean_vertex_degree = mean(vertex_degrees),
+      vertex_degree_cv = sd(vertex_degrees) / mean(vertex_degrees),
+      isolated_vertices = sum(vertex_degrees == 0),  # 不应该存在
+      irregular_vertices = sum(vertex_degrees > 8)   # 度数过高的顶点
+    ),
+    topology = list(
+      boundary_edges = boundary_edges,
+      internal_edges = internal_edges,
+      irregular_edges = irregular_edges,
+      topology_score = ifelse(irregular_edges == 0, 1, 0)
+    )
+  ))
+}
+
+# 3. 数值稳定性评估
+assess_numerical_quality <- function(mesh) {
+  # 计算刚度矩阵的条件数（简化版本）
+  triangles <- mesh$graph$tv
+  vertices <- mesh$loc
+
+  # 最小三角形面积（影响数值稳定性）
+  min_area <- Inf
+  areas <- c()
+
+  for (i in 1:nrow(triangles)) {
+    v1 <- vertices[triangles[i,1], ]
+    v2 <- vertices[triangles[i,2], ]
+    v3 <- vertices[triangles[i,3], ]
+    area <- abs((v2[1]-v1[1])*(v3[2]-v1[2]) - (v3[1]-v1[1])*(v2[2]-v1[2])) / 2
+    areas <- c(areas, area)
+    min_area <- min(min_area, area)
+  }
+
+  # 最小边长
+  min_edge_length <- Inf
+  for (i in 1:nrow(triangles)) {
+    v1 <- vertices[triangles[i,1], ]
+    v2 <- vertices[triangles[i,2], ]
+    v3 <- vertices[triangles[i,3], ]
+
+    edge1 <- sqrt(sum((v2-v1)^2))
+    edge2 <- sqrt(sum((v3-v2)^2))
+    edge3 <- sqrt(sum((v1-v3)^2))
+
+    min_edge_length <- min(min_edge_length, edge1, edge2, edge3)
+  }
+
+  # 面积比值（最大面积/最小面积）
+  area_ratio <- max(areas) / min(areas)
+
+  return(list(
+    stability = list(
+      min_area = min_area,
+      min_edge_length = min_edge_length,
+      area_ratio = area_ratio,
+      degeneracy_risk = ifelse(min_area < 1e-10, "High",
+                               ifelse(min_area < 1e-6, "Medium", "Low")),
+      numerical_score = max(0, min(1, log10(min_area + 1e-12) + 12) / 12)
+    )
+  ))
+}
+
+# 4. 应用特定质量评估
+assess_application_quality <- function(mesh, original_sf) {
+  # 边界拟合质量
+  boundary_quality <- assess_boundary_fitting(mesh, original_sf)
+
+  # 分辨率适应性
+  resolution_quality <- assess_resolution_adaptation(mesh, original_sf)
+
+  return(list(
+    boundary_fitting = boundary_quality,
+    resolution_adaptation = resolution_quality
+  ))
+}
+
+# 边界拟合质量评估
+assess_boundary_fitting <- function(mesh, original_sf) {
+  # 这是一个简化的边界拟合评估
+  # 在实际应用中可能需要更复杂的几何计算
+
+  tryCatch({
+    # 获取网格边界点
+    boundary_vertices <- get_boundary_vertices(mesh)
+
+    # 简单的边界覆盖评估
+    mesh_bbox <- list(
+      xmin = min(mesh$loc[,1]),
+      xmax = max(mesh$loc[,1]),
+      ymin = min(mesh$loc[,2]),
+      ymax = max(mesh$loc[,2])
+    )
+
+    sf_bbox <- sf::st_bbox(original_sf)
+
+    # 计算边界框匹配度
+    bbox_match <- 1 - (
+      abs(mesh_bbox$xmin - sf_bbox$xmin) +
+        abs(mesh_bbox$xmax - sf_bbox$xmax) +
+        abs(mesh_bbox$ymin - sf_bbox$ymin) +
+        abs(mesh_bbox$ymax - sf_bbox$ymax)
+    ) / (sf_bbox$xmax - sf_bbox$xmin + sf_bbox$ymax - sf_bbox$ymin)
+
+    return(list(
+      boundary_vertices_count = length(boundary_vertices),
+      bbox_match_score = max(0, min(1, bbox_match)),
+      fitting_quality = "Estimated"  # 标记这是估算值
+    ))
+
+  }, error = function(e) {
+    return(list(
+      boundary_vertices_count = NA,
+      bbox_match_score = 0.5,  # 默认中等分数
+      fitting_quality = "Cannot assess",
+      error = as.character(e)
+    ))
+  })
+}
+
+# 分辨率适应性评估
+assess_resolution_adaptation <- function(mesh, original_sf) {
+  tryCatch({
+    # 简化的分辨率评估
+    n_vertices <- nrow(mesh$loc)
+
+    # 根据几何复杂度评估顶点密度是否合适
+    area_total <- as.numeric(sf::st_area(original_sf))
+    vertex_density <- n_vertices / area_total
+
+    # 评估网格分辨率是否适中
+    # 这个阈值可能需要根据具体应用调整
+    resolution_score <- ifelse(vertex_density > 1e-6 & vertex_density < 1e-2,
+                               1, 0.5)
+
+    return(list(
+      vertex_density = vertex_density,
+      total_area = area_total,
+      resolution_score = resolution_score,
+      adaptation_quality = ifelse(resolution_score > 0.8, "Good", "Moderate")
+    ))
+
+  }, error = function(e) {
+    return(list(
+      vertex_density = NA,
+      total_area = NA,
+      resolution_score = 0.5,
+      adaptation_quality = "Cannot assess",
+      error = as.character(e)
+    ))
+  })
+}
+
+# 获取边界顶点（简化版本）
+get_boundary_vertices <- function(mesh) {
+  triangles <- mesh$graph$tv
+
+  # 找到所有边
+  edges <- rbind(
+    cbind(triangles[,1], triangles[,2]),
+    cbind(triangles[,2], triangles[,3]),
+    cbind(triangles[,3], triangles[,1])
+  )
+
+  # 标准化边（小索引在前）
+  edges_normalized <- t(apply(edges, 1, function(x) sort(x)))
+
+  # 找到只出现一次的边（边界边）
+  edge_counts <- table(apply(edges_normalized, 1, paste, collapse = "-"))
+  boundary_edges <- names(edge_counts[edge_counts == 1])
+
+  # 提取边界顶点
+  boundary_vertices <- unique(unlist(lapply(boundary_edges, function(e) {
+    as.numeric(strsplit(e, "-")[[1]])
+  })))
+
+  return(boundary_vertices)
+}
+
+# 辅助函数
+calculate_triangle_angles <- function(v1, v2, v3) {
+  # 计算三角形的三个角degree（度）
+  edge1 <- sqrt(sum((v2-v1)^2))
+  edge2 <- sqrt(sum((v3-v2)^2))
+  edge3 <- sqrt(sum((v1-v3)^2))
+
+  # 防止数值错误
+  edge1 <- max(edge1, 1e-10)
+  edge2 <- max(edge2, 1e-10)
+  edge3 <- max(edge3, 1e-10)
+
+  # 余弦定理
+  cos_angle1 <- (edge1^2 + edge3^2 - edge2^2) / (2*edge1*edge3)
+  cos_angle2 <- (edge1^2 + edge2^2 - edge3^2) / (2*edge1*edge2)
+  cos_angle3 <- (edge2^2 + edge3^2 - edge1^2) / (2*edge2*edge3)
+
+  # 限制余弦值范围以避免数值错误
+  cos_angle1 <- max(-1, min(1, cos_angle1))
+  cos_angle2 <- max(-1, min(1, cos_angle2))
+  cos_angle3 <- max(-1, min(1, cos_angle3))
+
+  angle1 <- acos(cos_angle1) * 180/pi
+  angle2 <- acos(cos_angle2) * 180/pi
+  angle3 <- acos(cos_angle3) * 180/pi
+
+  return(c(angle1, angle2, angle3))
+}
+
+calculate_overall_score <- function(geom, topo, numer) {
+  # 综合评分权重
+  weights <- c(0.4, 0.3, 0.3)  # 几何、拓扑、数值
+
+  geom_score <- (geom$area_stats$uniformity_score * 0.4 +
+                   geom$shape_quality$aspect_ratio_score * 0.3 +
+                   geom$shape_quality$angle_quality_score * 0.3)
+
+  topo_score <- topo$topology$topology_score
+
+  numer_score <- numer$stability$numerical_score
+
+  overall <- weights[1] * geom_score +
+    weights[2] * topo_score +
+    weights[3] * numer_score
+
+  return(max(0, overall * 100))  # 转换为0-100分
+}
+
+get_quality_level <- function(score) {
+  if (score >= 80) return("优秀 (Excellent)")
+  if (score >= 70) return("良好 (Good)")
+  if (score >= 60) return("可接受 (Acceptable)")
+  if (score >= 50) return("需要改进 (Needs Improvement)")
+  return("不合格 (Poor)")
+}
+
+# 网格质量可视化
+visualize_mesh_quality <- function(mesh, quality_assessment) {
+  par(mfrow = c(2, 3), mar = c(4, 4, 2, 1))
+
+  # 1. 基本网格结构
+  plot(mesh, main = "网格结构")
+  points(mesh$loc, pch = 16, cex = 0.3, col = "red")
+
+  # 2. 顶点度数分布
+  triangles <- mesh$graph$tv
+  vertex_degrees <- as.vector(table(as.vector(triangles)))
+  hist(vertex_degrees, main = "顶点度数分布",
+       xlab = "度数", ylab = "频率", col = "lightblue")
+
+  # 3. 三角形面积分布
+  triangles <- mesh$graph$tv
+  vertices <- mesh$loc
+  areas <- c()
+  for (i in 1:nrow(triangles)) {
+    v1 <- vertices[triangles[i,1], ]
+    v2 <- vertices[triangles[i,2], ]
+    v3 <- vertices[triangles[i,3], ]
+    area <- abs((v2[1]-v1[1])*(v3[2]-v1[2]) - (v3[1]-v1[1])*(v2[2]-v1[2])) / 2
+    areas <- c(areas, area)
+  }
+  hist(areas, main = "三角形面积分布",
+       xlab = "面积", ylab = "频率", col = "lightgreen")
+
+  # 4. 质量指标柱状图
+  scores <- c(
+    quality_assessment$geometric$area_stats$uniformity_score * 100,
+    quality_assessment$geometric$shape_quality$aspect_ratio_score * 100,
+    quality_assessment$topological$topology$topology_score * 100,
+    quality_assessment$numerical$stability$numerical_score * 100
+  )
+
+  barplot(scores,
+          names.arg = c("面积\n均匀性", "形状\n质量", "拓扑\n质量", "数值\n稳定性"),
+          main = "质量指标分解", ylim = c(0, 100),
+          col = c("skyblue", "lightcoral", "lightgreen", "orange"))
+  abline(h = c(60, 80), lty = 2, col = "red")
+
+  # 5. 整体质量摘要
+  plot.new()
+  text(0.5, 0.8, "网格质量摘要", cex = 1.5, adj = 0.5, font = 2)
+  text(0.5, 0.65, paste("整体得分:", round(quality_assessment$overall_score, 1)),
+       cex = 1.8, adj = 0.5, col = "blue")
+  text(0.5, 0.5, quality_assessment$quality_level, cex = 1.3, adj = 0.5,
+       col = ifelse(quality_assessment$overall_score >= 70, "green", "orange"))
+  text(0.5, 0.35, paste("顶点数:", quality_assessment$basic_info$vertices),
+       cex = 1.1, adj = 0.5)
+  text(0.5, 0.25, paste("三角形数:", quality_assessment$basic_info$triangles),
+       cex = 1.1, adj = 0.5)
+  text(0.5, 0.1, paste("平均纵横比:", round(quality_assessment$geometric$shape_quality$mean_aspect_ratio, 2)),
+       cex = 1, adj = 0.5)
+
+  # 6. 角度质量分布
+  triangles <- mesh$graph$tv
+  vertices <- mesh$loc
+  all_angles <- c()
+
+  for (i in 1:nrow(triangles)) {
+    v1 <- vertices[triangles[i,1], ]
+    v2 <- vertices[triangles[i,2], ]
+    v3 <- vertices[triangles[i,3], ]
+    angles <- calculate_triangle_angles(v1, v2, v3)
+    all_angles <- c(all_angles, angles)
+  }
+
+  hist(all_angles, main = "角度分布",
+       xlab = "角度 (度)", ylab = "频率", col = "lightyellow",
+       xlim = c(0, 180))
+  abline(v = c(30, 60, 120), col = "red", lty = 2)
+  legend("topright", c("30°", "60°", "120°"), col = "red", lty = 2, cex = 0.8)
+
+  par(mfrow = c(1, 1))
+}
+
+# 简化版质量评估（快速版本）
+quick_mesh_assessment <- function(mesh) {
+  triangles <- mesh$graph$tv
+  vertices <- mesh$loc
+
+  # 快速计算关键指标
+  areas <- c()
+  aspect_ratios <- c()
+  min_angles <- c()
+
+  for (i in 1:min(100, nrow(triangles))) {  # 只采样前100个三角形
+    v1 <- vertices[triangles[i,1], ]
+    v2 <- vertices[triangles[i,2], ]
+    v3 <- vertices[triangles[i,3], ]
+
+    # 面积
+    area <- abs((v2[1]-v1[1])*(v3[2]-v1[2]) - (v3[1]-v1[1])*(v2[2]-v1[2])) / 2
+    areas <- c(areas, area)
+
+    # 边长和纵横比
+    edge1 <- sqrt(sum((v2-v1)^2))
+    edge2 <- sqrt(sum((v3-v2)^2))
+    edge3 <- sqrt(sum((v1-v3)^2))
+    aspect_ratio <- max(edge1, edge2, edge3) / min(edge1, edge2, edge3)
+    aspect_ratios <- c(aspect_ratios, aspect_ratio)
+
+    # 最小角度
+    angles <- calculate_triangle_angles(v1, v2, v3)
+    min_angles <- c(min_angles, min(angles))
+  }
+
+  # 快速评分
+  area_cv <- sd(areas) / mean(areas)
+  mean_aspect_ratio <- mean(aspect_ratios)
+  mean_min_angle <- mean(min_angles)
+
+  # 综合快速评分
+  quick_score <- (
+    max(0, 1 - area_cv) * 40 +               # 面积均匀性 (40%)
+      max(0, min(1, 2/mean_aspect_ratio)) * 30 + # 形状质量 (30%)
+      max(0, min(1, mean_min_angle/30)) * 30    # 角度质量 (30%)
+  )
+
+  quality_level <- ifelse(quick_score >= 70, "良好",
+                          ifelse(quick_score >= 50, "可接受", "需要改进"))
+
+  return(list(
+    vertices = nrow(vertices),
+    triangles = nrow(triangles),
+    area_cv = area_cv,
+    mean_aspect_ratio = mean_aspect_ratio,
+    mean_min_angle = mean_min_angle,
+    quick_score = quick_score,
+    quality_level = quality_level
+  ))
+}
+
+# 生成质量报告
+generate_quality_report <- function(quality_result) {
+  cat("=== 网格质量评估详细报告 ===\n\n")
+
+  # 基本信息
+  cat("【基本信息】\n")
+  cat("顶点数量:", quality_result$basic_info$vertices, "\n")
+  cat("三角形数量:", quality_result$basic_info$triangles, "\n")
+  cat("顶点密度:", round(quality_result$basic_info$density, 6), "\n\n")
+
+  # 整体评分
+  cat("【整体评估】\n")
+  cat("综合得分:", round(quality_result$overall_score, 1), "/100\n")
+  cat("质量等级:", quality_result$quality_level, "\n\n")
+
+  # 几何质量
+  cat("【几何质量】\n")
+  cat("面积统计:\n")
+  cat("  - 平均面积:", format(quality_result$geometric$area_stats$mean, scientific = TRUE), "\n")
+  cat("  - 面积变异系数:", round(quality_result$geometric$area_stats$cv, 3), "\n")
+  cat("  - 面积均匀性得分:", round(quality_result$geometric$area_stats$uniformity_score, 3), "\n")
+  cat("形状质量:\n")
+  cat("  - 平均纵横比:", round(quality_result$geometric$shape_quality$mean_aspect_ratio, 2), "\n")
+  cat("  - 最大纵横比:", round(quality_result$geometric$shape_quality$max_aspect_ratio, 2), "\n")
+  cat("  - 平均最小角度:", round(quality_result$geometric$shape_quality$min_angle_mean, 1), "度\n")
+  cat("  - 最小角度:", round(quality_result$geometric$shape_quality$min_angle_worst, 1), "度\n\n")
+
+  # 拓扑质量
+  cat("【拓扑质量】\n")
+  cat("连接性:\n")
+  cat("  - 平均顶点度数:", round(quality_result$topological$connectivity$mean_vertex_degree, 1), "\n")
+  cat("  - 孤立顶点数:", quality_result$topological$connectivity$isolated_vertices, "\n")
+  cat("拓扑结构:\n")
+  cat("  - 边界边数:", quality_result$topological$topology$boundary_edges, "\n")
+  cat("  - 内部边数:", quality_result$topological$topology$internal_edges, "\n")
+  cat("  - 异常边数:", quality_result$topological$topology$irregular_edges, "\n\n")
+
+  # 数值稳定性
+  cat("【数值稳定性】\n")
+  cat("最小面积:", format(quality_result$numerical$stability$min_area, scientific = TRUE), "\n")
+  cat("最小边长:", format(quality_result$numerical$stability$min_edge_length, scientific = TRUE), "\n")
+  cat("退化风险:", quality_result$numerical$stability$degeneracy_risk, "\n")
+  cat("面积比值:", round(quality_result$numerical$stability$area_ratio, 1), "\n\n")
+
+  # 应用质量（如果有）
+  if (!is.null(quality_result$application)) {
+    cat("【应用适应性】\n")
+    if (!is.null(quality_result$application$boundary_fitting)) {
+      cat("边界拟合:\n")
+      cat("  - 边界顶点数:", quality_result$application$boundary_fitting$boundary_vertices_count, "\n")
+      cat("  - 边界匹配度:", round(quality_result$application$boundary_fitting$bbox_match_score, 3), "\n")
+    }
+    if (!is.null(quality_result$application$resolution_adaptation)) {
+      cat("分辨率适应:\n")
+      if (!is.na(quality_result$application$resolution_adaptation$vertex_density)) {
+        cat("  - 顶点密度:", format(quality_result$application$resolution_adaptation$vertex_density, scientific = TRUE), "\n")
+        cat("  - 总面积:", format(quality_result$application$resolution_adaptation$total_area, scientific = TRUE), "\n")
+      }
+      cat("  - 分辨率评价:", quality_result$application$resolution_adaptation$adaptation_quality, "\n")
+    }
+    cat("\n")
+  }
+
+  # 改进建议
+  cat("【改进建议】\n")
+  if (quality_result$overall_score < 60) {
+    cat("- 网格质量较差，建议重新生成\n")
+    if (quality_result$geometric$area_stats$cv > 0.5) {
+      cat("- 面积分布不均，建议调整edge ratio参数\n")
+    }
+    if (quality_result$geometric$shape_quality$mean_aspect_ratio > 3) {
+      cat("- 存在过度细长三角形，建议增加inner_edge_ratio\n")
+    }
+    if (quality_result$geometric$shape_quality$min_angle_mean < 20) {
+      cat("- 角度质量差，建议调整offset参数\n")
+    }
+  } else if (quality_result$overall_score < 80) {
+    cat("- 网格质量可接受，可考虑微调参数进一步优化\n")
+  } else {
+    cat("- 网格质量优秀，无需特殊调整\n")
+  }
+}
+
+
+# 评估网格质量
+comprehensive_mesh_assessment(mesh_result$mesh, gs)
+```
+
+##### 构建 SPDE 模型并设置先验分布
+
+在拟合贝叶斯层次模型之前，必须为与时空自相关相关的模型参数定义先验分布。函数：使用 INLA::inla.spde2.pcmatern() 函数构建 SPDE 模型，并为 Matérn 场的参数指定惩罚复杂度 (PC) 先验。PC 先验指定： 空间范围参数 $\rho$ 和边际标准差 $\sigma$ 的 PC 先验通过设置prior_range、ps_range、prior_sigma 和 pg_sigma 的值来指定，满足关系： $P(\rho < {prior\_range}) = {ps\_range}$ $P(\sigma > {prior_\sigma}) = {pg_\sigma}$
+
+时间自相关参数 $\alpha$ 的 PC 先验通过设置 prior_alpha 和 pg_alpha 的值来指定，满足关系：$P(\alpha > {prior_\alpha}) = {pg_\alpha}$
+
+先验选择取决于具体研究问题、先前的研究发现和专家知识。探索不同的先验有助于评估模型结果对先验分布选择的敏感性，并理解先验假设对最终推断的影响。选择不当的先验可能导致不准确的预测，甚至导致模型拟合过程中程序崩溃。
+
+### 定义模型公式
+
+为了拟合时空模型，需要定义一个模型公式，左侧包含响应变量，右侧包含固定效应和随机效应。
+
+### 模型拟合
+
+最后，通过调用 inlabru包的bru()函数来拟合时空模型。该函数需要数据的坐标，因此需要将数据集转换为SpatialPointsDataFrame。内存要求：对于大规模数据，模型运行可能需要大量内存和较长的计算时间）。
+
+## fdmr包的实用工具和可视化
+
+fdmr包提供了一系列工具来辅助模型构建、可视化和结果分析。
+
+### 数据可视化
+
+fdmr::plot_map()：根据提供的SpatialPolygonDataFrame 或data.frame 生成研究区域地图，并可叠加模拟数据或大坝位置等信息。fdmr::plot_timeseries()：用于绘制时间序列数据，例如平均溪流流量。
+
+### 网格和模型构建工具
+
+fdmr::plot_mesh()：显示网格和叠加在网格上的观测点。fdmr::mesh_builder()：提供交互式网格构建工具，允许用户自定义网格参数。 fdmr::model_builder()：一个交互式Shiny应用程序，允许用户交互式地设置和查看不同先验分布的模型拟合结果。用户可以选择要建模的变量，添加协变量，构建公式，并在界面中运行模型并查看输出图表。
+
+### 模型输出可视化与分析
+
+fdmr::model_viewer()：一个独立的Shiny应用程序，用于直观地可视化模型输出。用户可以将bru 模型对象、网格、观测数据和数据分布作为参数传递给该函数，以自动创建图表和预测地图。 结果摘要：可以通过 summary(inlabru_model) 命令检查主要结果摘要，包括固定效应、随机效应和超参数的估计值，以及偏差信息准则(DIC) 模型比较：可以通过比较不同模型的DIC和WAIC值来评估模型拟合优度，较低的值通常表示更好的模型性能。同时也可以比较模型的后验感染率估计和协变量回归系数。
+
+## 模型评估指标
+
+评估模型的预测准确性是评估其性能的关键方面，尤其是在时间序列数据的情况下。均方根误差(RMSE)：量化预测值和观察值之间差异的平均幅度，较低的值表示更好的预测性能。偏差(Bias)：测量预测值和观察值之间的平均差异。覆盖概率(CP)：计算包含观察风险的95%CI的比例，用于测量风险预测的不确定性。相对均方根误差(R-RMSE)和相对偏差(R-Bias)：测量预测值和观察值之间差异相对于观察值的幅度。这些指标可以通过移动时间序列窗口进行计算，即随着每周新数据的出现，使用所有先前数据训练模型，并用新验证数据更新评估指标。

@@ -1,0 +1,319 @@
+# 广义线性模型
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+```
+
+贝叶斯广义线性模型(Bayesian Generalized Linear Model, BGLM)是将贝叶斯推断框架与传统广义线性模型(GLM)相结合的统计方法。与频率派GLM不同，BGLM通过引入先验分布来表达参数的不确定性，并通过贝叶斯定理更新这些参数的后验分布。贝叶斯框架的核心优势在于它能够：直接量化参数估计的不确定性；通过先验分布整合领域知识；处理小样本数据集的情况；提供完整的预测分布而非点估计。
+
+BGLM保留了GLM的链接函数机制，使模型能够处理非正态分布的响应变量，同时添加了贝叶斯层次结构来处理参数推断。
+
+## 模型定义
+
+假设我们有响应变量 $\mathbf{y} = (y_1, y_2, \ldots, y_n)^T$ 和预测变量矩阵 $\mathbf{X} \in \mathbb{R}^{n \times p}$。贝叶斯广义线性模型可以表述为：
+
+$$y_i \sim F(\mu_i, \phi)$$
+
+其中 $F$ 是指数族分布，$\mu_i$ 是 $y_i$ 的期望，$\phi$ 是离散参数。期望 $\mu_i$ 通过链接函数 $g$ 与线性预测器关联：
+
+$$g(\mu_i) = \eta_i = \mathbf{x}_i^T {\beta}$$
+
+其中 $\mathbf{x}_i^T$ 是预测变量矩阵的第 $i$ 行，${\beta} = (\beta_1, \beta_2, \ldots, \beta_p)^T$ 是回归系数向量。
+
+### 先验分布
+
+在贝叶斯框架中，我们需要为模型参数指定先验分布。常见的先验设置包括：
+
+1. 回归系数 ${\beta}$ 的先验：
+   $${\beta} \sim \mathcal{N}({\mu}_0, {\Sigma}_0)$$
+ 
+   其中 ${\mu}_0$ 是先验均值向量，${\Sigma}_0$ 是先验协方差矩阵。
+
+2. 对于离散参数 $\phi$，根据具体分布可以选择共轭先验，例如：
+   - 对于正态分布的方差参数，可以使用逆伽马分布
+   - 对于二项分布，通常不需要额外的离散参数
+   - 对于泊松分布，同样不需要额外的离散参数
+
+### 后验分布
+
+根据贝叶斯定理，参数 ${\beta}$ 的后验分布为：
+
+$$p({\beta}|\mathbf{y}, \mathbf{X}) \propto p(\mathbf{y}|\mathbf{X}, {\beta}) \times p({\beta})$$
+
+其中 $p(\mathbf{y}|\mathbf{X}, {\beta})$ 是似然函数，$p({\beta})$ 是先验分布。
+
+对于非共轭先验情况，后验分布通常没有闭合形式，需要使用马尔可夫链蒙特卡洛(MCMC)方法或变分贝叶斯(VB)方法进行近似推断：
+
+$$p({\beta}|\mathbf{y}, \mathbf{X}) \approx \frac{1}{M} \sum_{m=1}^M \delta_{{\beta}^{(m)}}({\beta})$$
+
+其中 ${\beta}^{(m)}$ 是从后验分布中抽取的第 $m$ 个样本，$M$ 是样本总数，$\delta$ 是狄拉克函数。
+
+### 预测分布
+
+贝叶斯框架的一个主要优势是能够直接获得预测分布。对于新输入 $\mathbf{x}_*$，预测分布为：
+
+$$p(y_*|\mathbf{x}_*, \mathbf{y}, \mathbf{X}) = \int p(y_*|\mathbf{x}_*, {\beta}) p({\beta}|\mathbf{y}, \mathbf{X}) d{\beta}$$
+
+通过MCMC方法，预测分布可以近似为：
+
+$$p(y_*|\mathbf{x}_*, \mathbf{y}, \mathbf{X}) \approx \frac{1}{M} \sum_{m=1}^M p(y_*|\mathbf{x}_*, {\beta}^{(m)})$$
+
+### 模型选择
+
+贝叶斯模型选择通常基于以下指标：
+
+1. 偏差信息准则(DIC)：
+   $$\text{DIC} = -2\log(p(\mathbf{y}|\hat{{\beta}})) + 2p_D$$
+ 
+   其中 $p_D$ 是有效参数数量。
+
+2. 渐近模型选择：
+   $$\text{WAIC} = -2\sum_{i=1}^n \log\left(\frac{1}{M}\sum_{m=1}^M p(y_i|\mathbf{x}_i, {\beta}^{(m)})\right) + 2p_{\text{WAIC}}$$
+
+3. 贝叶斯因子：
+   $$B_{12} = \frac{p(\mathbf{y}|M_1)}{p(\mathbf{y}|M_2)} = \frac{\int p(\mathbf{y}|{\beta}_1, M_1)p({\beta}_1|M_1)d{\beta}_1}{\int p(\mathbf{y}|{\beta}_2, M_2)p({\beta}_2|M_2)d{\beta}_2}$$
+
+## 二元响应变量
+
+### 数据
+stroke数据来自一项针对住院卒中患者的研究。数据集包含226个入院患者的的7个变量。
+
+```{r}
+stroke <- read_dta("data/stroke.dta") |>  
+  mutate(across(where(is.labelled), as_factor)) |> 
+  zap_labels() |> 
+  mutate(stroke_type = relevel(stroke_type, ref = "Ischaemic Stroke"),
+  sex=relevel(sex,ref="female")) |> 
+  as_tibble()
+
+var_desc <- data.frame(
+  变量名 = names(stroke),
+  描述 = c(
+    "性别：女性或男性",
+    "住院期间的患者状态 （存活或死亡）",
+    "入院时格拉斯哥昏迷评分（范围从 3 到 15）",
+    "收缩压 （mmHg）",
+    "糖尿病史（是或否）",
+    "入院患者年龄",
+    "IS（缺血性中风）或 HS（出血性中风）"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+inla 对响应变量的类型要求为数值，需要对stroke数据格式进行转换，0为存活，1为死亡。family = "binomial", 指定响应变量服从二项分布，Ntrials = 1指定每个观测的试验次数为1，建立了一个标准的二分类logistic回归模型，
+```{r}
+stroke |> 
+  mutate(status=as.numeric(status)) |>
+  mutate(status=case_when(status==1 ~0,status==2 ~1))-> stroke
+
+formula <- status ~ gcs+sex+sbp+age+dm+stroke_type
+stroke_inla <- inla(formula, data = stroke,family = "binomial",Ntrials = 1)
+summary(stroke_inla)
+plot(stroke_inla)
+```
+
+stroke_type(卒中类型): 1.31 (95%CI: -0.46 to -2.18)显著为负，相对于缺血性的出血性卒中风险明显更高。gcs(格拉斯哥昏迷量表): -0.35 (95%CI: -0.47 to -0.24)，显著为正，表明GCS每增加1分，患者不良结局死亡的对数几率增加0.35，不良结局风险越低。其余变量无显著性差异。
+
+### brms实现
+```{r}
+formula <- status ~ gcs+sex+sbp+age+dm+stroke_type
+stroke_brms <- brm(formula, data = stroke,family = bernoulli(),refresh = 0,silent = TRUE)
+summary(stroke_brms)
+```
+
+模型采用伯努利分布和logit链接函数，基于226名中风患者的数据，通过4条马尔可夫链各运行2000次迭代（包含1000次预热）进行参数估计。结果显示，格拉斯哥昏迷量表评分（GCS）对结局有显著负向影响（回归系数-0.35，95%CI-0.46至-0.24），表明GCS评分越低，不良结局的风险越高。出血性中风相比缺血性中风显著增加不良结局风险（回归系数1.32，95%CI0.46至2.21）。其他变量包括性别、收缩压、年龄和糖尿病史的影响均不显著，其CI包含0。所有参数的Rhat值均为1.00且有效样本量充足，表明MCMC采样收敛良好，结果可靠。
+
+## 计数响应变量
+
+### 数据
+asthma数据来自120 名哮喘患者，有4个变量。
+
+```{r}
+asthma = read.csv("data/asthma.csv")
+
+var_desc <- data.frame(
+  变量名 = names(asthma),
+  描述 = c(
+    "性别，女性或男性",
+    "重复呼吸道感染，有或无",
+    "健康问卷（GHQ-12）心理健康得分（数值）",
+    "每年哮喘发作次数（计数）"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+```{r}
+formula <- attack ~ gender + res_inf * ghq12
+attack_inla <- inla(formula, data = asthma,family = "poisson")
+summary(attack_inla)
+plot(attack_inla)
+```
+
+存在重复感染时，结局的对数几率增加1.03。GHQ-12每增加1分，结局发生的对数几率增加0.07。重复感染与GHQ-12之间存在微弱但显著的负向交互作用。
+
+### brms实现
+```{r}
+formula <- attack ~ gender + res_inf * ghq12
+attack_brms <- brm(formula, data = asthma,family = poisson(),refresh = 0,silent = TRUE)
+summary(attack_brms)
+plot(attack_brms)
+```
+
+结果显示，呼吸道感染（res_inf）显著增加哮喘发作风险（回归系数1.01，95%CI0.39至1.69），心理健康问卷得分（GHQ-12）也显著正向影响发作频率（回归系数0.07，95%CI0.04至0.09），表明心理健康状况越差，哮喘发作越频繁。值得注意的是，呼吸道感染与心理健康得分存在显著的负向交互作用（回归系数-0.03，95%CI-0.06至-0.00），提示在有呼吸道感染的情况下，心理健康对哮喘发作的影响有所减弱。性别对哮喘发作频率无显著影响。所有参数的Rhat值均为1.00，表明MCMC采样收敛良好，结果可靠。
+
+## 率响应变量
+### 数据
+asthma数据来自肺癌病例数据，有4个变量。
+
+```{r}
+smoke <- read.csv("data/smoke.csv")
+
+var_desc <- data.frame(
+  变量名 = names(smoke),
+  描述 = c(
+    "吸烟年数的分类",
+    "每日香烟数量（数值）",
+    "人年数",
+    "肺癌病例数"
+  )
+)
+
+#查看观察到的比率
+smoke <- smoke %>% mutate(rate = round(case/person_yrs, 4))
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+```{r}
+formula <- case ~ cigar_day + smoke_yrs
+smoke_inla <- inla(formula, data = smoke,family = "poisson",
+offset = log(person_yrs))
+summary(smoke_inla)
+plot(smoke_inla)
+```
+
+基线风险 (Intercept)系数：-11.772（95%CI：-13.713至-9.831），在控制其他因素的情况下，基线对数几率非常低，表明在不吸烟的情况下，疾病风险极低。每日吸烟量效应 (cigar_day)系数：0.065（95%CI：0.053至0.078）每增加一支烟/天，疾病的对数几率增加0.065。吸烟年限越长，疾病风险越高，且呈现非线性增长临界点：在30年左右出现风险的显著跃升（此时CI不再包含0），长期吸烟的巨大风险：吸烟超过50年的人群，疾病风险是不吸烟人群的200倍以上。
+
+### brms实现
+```{r}
+formula <- case ~ cigar_day + smoke_yrs
+smoke_brms <- brm(formula, data = smoke,family = poisson(),refresh = 0,silent = TRUE)
+summary(smoke_brms)
+plot(smoke_brms)
+```
+
+每日雪茄消费量（cigar_day）对病例数有显著的正向影响（回归系数0.04，95%CI0.03至0.05），表明每增加一支雪茄的日消费量，病例发生率增加约4%。吸烟年限的影响呈现明显的剂量-反应关系：相比参考组，吸烟25-29年组开始出现显著影响（回归系数2.11），40-44年组达到最高风险（回归系数4.05，95%CI2.13至7.32），随后在更高年限组中略有下降但仍保持在较高水平。需要注意的是，部分参数的有效样本量较低（300-400）且Rhat值略高于1.01，提示模型收敛性存在轻微问题，可能需要增加迭代次数以获得更稳定的估计结果。
+
+## 比例响应变量
+
+### 数据
+数据来源于betareg包，是Smithson & Verkuilen的小学生的准确性分数
+```{r}
+data("ReadingSkills", package = "betareg")
+
+var_desc <- data.frame(
+  变量名 = names(ReadingSkills),
+  描述 = c(
+    "阅读分数,最大限制为0.99",
+    "是否有读写障碍",
+    "智商得分，转为Z得分",
+    "未受限制的阅读分数，最大为1"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+```{r}
+formula <- accuracy ~  dyslexia + iq + dyslexia * iq
+Reading_inla <- inla(formula, data = ReadingSkills,family = "beta")
+summary(Reading_inla)
+plot(Reading_inla)
+```
+
+在控制IQ后，有阅读障碍(dyslexia)的个体阅读表现显著降低。IQ的CI包含零，表明这种效应在统计上不显著。交互作用 (dyslexia:iq)包含0，表明交互作用不显著。
+
+### brms实现
+```{r}
+formula <- accuracy ~  dyslexia + iq + dyslexia * iq
+Reading_brms <- brm(formula, data = ReadingSkills,family = brms::Beta(),,refresh = 0,silent=TRUE)
+summary(Reading_brms)
+plot(Reading_brms)
+```
+
+阅读障碍（dyslexia）对阅读准确率有显著的负向影响（回归系数-0.97，95%CI-1.23至-0.68），表明患有阅读障碍的个体阅读准确率显著降低。智商（IQ）的主效应不显著（回归系数0.16，95%CI-0.11至0.42），提示在控制其他因素后，智商对阅读准确率的直接影响有限。阅读障碍与智商的交互作用也不显著（回归系数-0.21，95%CI-0.48至0.07），但数值为负，暗示可能存在阅读障碍削弱智商对阅读表现积极作用的趋势。分布参数phi为10.40，表明数据的精确度较高。所有参数的Rhat值均为1.00且有效样本量充足，表明MCMC采样收敛良好，结果可靠。
+
+## 零膨胀响应变量
+
+响应变量为计数且包含过多零值时，通过同时建模"零概率"和"计数"两个过程。
+
+### 数据
+数据来源于 brinla包，研究了科学家发表文章的数量。
+```{r}
+data("articles", package = "brinla")
+
+var_desc <- data.frame(
+  变量名 = names(articles),
+  描述 = c(
+    "性别",
+    "导师发表的文章数量",
+    "项目声望",
+    "婚姻状况",
+    "5岁以下孩子数量",
+    "文章数量"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### inla实现
+下面的通过family = "zeroinflatedpoisson1"指定零膨胀的泊松模型，还可以通过family = "zeroinflatedbinomial1"指定零膨胀的负二项模型。
+
+```{r}
+formula <- art ~ fem + mar + kid5 + phd + ment
+articles_inla <- inla(formula, data=articles, family = "zeroinflatedpoisson1", control.compute = list(dic = TRUE, cpo = TRUE))
+summary(articles_inla)
+plot(articles_inla)
+```
+
+有5岁以下孩子(kid5=1)的人比无孩子(kid5=0)的人预期对数计数减少0.171。导师发表论文数量每增加一个单位，预期对数计数增加0.021。其余变量不显著。
+
+### brms实现
+使用brms包的bf()函数创建了一个零膨胀泊松回归模型的完整规范，包含两个组成部分：
+计数模型部分: art ~ fem + mar + kid5 + phd + ment
+零膨胀模型部分: zi ~ fem + mar + kid5 + phd + ment 其中zi特殊标记，表示"零膨胀"组件。
+
+```{r}
+formula <- bf(art ~ fem + mar + kid5 + phd + ment,
+                  zi ~ fem + mar + kid5 + phd + ment)
+
+# 或者使用截距作为零通胀部分唯一预测器（如果需要更接近INLA的简单结构）
+# formula <- bf(art ~ fem + mar + kid5 + phd + ment, 
+#                   zi ~ 1)
+
+articles_brms <- brm(
+  formula = formula,
+  data = articles,
+  family = zero_inflated_poisson(), # 零膨胀泊松分布
+  chains = 4,                       # MCMC链数
+  iter = 4000,                      # 迭代次数
+  warmup = 1000,                    # 预热迭代数
+  control = list(adapt_delta = 0.9), # 增加适应性步长以减少分歧
+  refresh = 0,silent=TRUE)
+summary(articles_brms)
+```
+
+贝叶斯零膨胀泊松回归模型的分析结果，用于分析学术文章发表数量（art）的影响因素。模型同时考虑了泊松过程（mu参数使用对数链接）和零膨胀过程（zi参数使用logit链接），基于915名学者的数据，通过4条MCMC链各运行4000次迭代（包含1000次预热）进行参数估计。在泊松过程部分，结果显示性别对发表数量有显著负向影响（fem1系数-0.21，95%CI-0.34至-0.09），即女性学者的平均发表数量显著低于男性。5岁以下儿童数量也显著负向影响发表数量（kid5系数-0.15，95%CI-0.24至-0.06），表明照顾幼儿会减少学术产出。导师发表数量（ment）对学者发表有显著正向影响（系数0.02），体现了导师指导的重要作用。婚姻状况和博士毕业年限对发表数量无显著影响。
+
+在零膨胀过程部分，只有导师发表数量有显著影响（zi_ment系数-0.15，95%CI-0.26至-0.07），表明导师发表越多的学者完全不发表文章的概率越低。所有参数的Rhat值均为1.00且有效样本量充足，表明模型收敛良好，结果可靠。

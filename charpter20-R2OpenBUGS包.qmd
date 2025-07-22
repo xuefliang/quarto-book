@@ -1,0 +1,203 @@
+# R2OpenBUGS
+
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(haven)      # For read_dta
+library(R2OpenBUGS) # For bugs()
+```
+
+OpenBUGS是一个专门用于贝叶斯推断的开源软件，采用Gibbs采样和Metropolis-Hastings算法进行MCMC计算。OpenBUGS基于WinBUGS开发， 和JAGS语法相似程度较高，语法简单易学，但收敛速度较慢，目前已经停止开发。
+
+## R2OpenBUGS安装
+
+通过这个链接https://github.com/jsta/openbugs下载openBugs，通过操作系统自带的工具集解压文件，
+
+```{bash}
+#| warning: false
+#| echo: true
+#| eval: false
+gzip -d OpenBUGS-3.2.3.tar.gz
+tar -xvzf OpenBUGS-3.2.3.tar
+```
+
+切换到目录中
+
+```{bash}
+#| echo: true
+#| eval: false
+./configure
+cd OpenBUGS-3.2.3
+make
+sudo make install
+```
+
+在安装 OpenBUGS 3.2.3 时，如果遇到“/usr/include/stdio.h:27:10: fatal error: bits/libc-header-start.h: No such file or directory”的错误，你需要安装 gcc-multilib。
+```{bash}
+#| echo: true
+#| eval: false
+sudo apt-get install gcc-multilib
+```
+
+在OpenBUGS 安装成功后安装R2OpenBUGS
+```{r}
+#| echo: true
+#| eval: false
+installed.packages("R2OpenBUGS")
+```
+
+## 应变量为连续变量
+继续使用第二章 STATA 格式的 coronary.dta 数据集。
+
+```{r}
+# Read data and ensure numeric variables
+coronary <- read_dta("data/coronary.dta") %>% 
+  mutate(chol=as.numeric(chol),dbp=as.numeric(dbp)) %>% 
+  filter(!is.na(chol))
+```
+
+使用R2OpenBUGS进行建模
+```{r}
+# 创建 BUGS 模型
+model_string <- "
+model {
+    # Likelihood
+    for (i in 1:N) {
+       chol[i] ~ dnorm(mu[i], tau)
+       mu[i] <- alpha + beta * dbp[i]
+    }
+
+    # Priors
+    alpha ~ dnorm(0, 0.001)      # Prior for intercept
+    beta ~ dnorm(0, 0.001)       # Prior for slope
+    tau ~ dgamma(0.001, 0.001)   # Prior for precision
+
+    # Calculate standard deviation
+    sigma <- 1/sqrt(tau)
+}
+"
+
+# Write model to a temporary file
+model_file <- tempfile(fileext = ".txt")
+writeLines(model_string, model_file)
+
+# Prepare BUGS data list
+bugs_data <- list(
+  N = nrow(coronary),
+  chol = coronary$chol,
+  dbp = coronary$dbp
+)
+
+# Initial values (more stable tau initialization)
+inits <- function() {
+  list(
+    alpha = rnorm(1, mean = 0, sd = 1),
+    beta = rnorm(1, mean = 0, sd = 1),
+    tau = rgamma(1, shape = 2, rate = var(coronary$chol)) # Based on data variance
+  )
+}
+
+# Parameters to monitor
+parameters <- c("alpha", "beta", "sigma")
+
+# Run BUGS model
+results <- bugs(
+  data = bugs_data,
+  inits = inits,
+  parameters.to.save = parameters,
+  model.file = model_file,
+  n.chains = 3,
+  n.iter = 10000,
+  n.burnin = 2000,
+  n.thin = 2, # Increased thinning to reduce autocorrelation
+)
+
+# Print results and check convergence
+print(results)
+print(results$summary[, "Rhat"]) # Check Gelman-Rubin statistic for convergence
+```
+
+在使用弱信息先验的情况下，模型结果表明：截距$\alpha$ = 3.0 ± 0.5，表示当舒张压为0时胆固醇的预期基线水平
+斜率$\beta$ ≈ 0.0，说明舒张压对胆固醇水平没有显著影响，两变量之间缺乏线性关联
+残差标准差$\sigma$ = 1.1 ± 0.1，反映模型预测的不确定性相对较小。模型基于3条MCMC链、24000个后验样本估计，所有参数的Rhat值都在1.001-1.006之间，显示收敛完美；有效样本量充足（860-24000），保证了估计的精度。
+
+## 应变量为二分类变量
+
+```{r}
+data(ohio,package = 'brinla')
+
+data_list <- list(
+  N = nrow(ohio),                    # 总观测数
+  n_id = length(unique(ohio$id)),    # 个体数量
+  resp = as.numeric(ohio$resp),      # 确保响应变量为数值型
+  age = as.numeric(ohio$age),        # 确保年龄为数值型
+  smoke = as.numeric(ohio$smoke),    # 吸烟状态转为数值
+  id = as.integer(as.factor(ohio$id)) # 个体ID转为整数
+)
+```
+
+使用R2OpenBUGS进行建模
+```{r}
+
+# BUGS模型定义
+model_string <- "
+model {
+    # 似然函数
+    for (i in 1:N) {
+        resp[i] ~ dbern(p[i])
+        logit(p[i]) <- alpha + beta_age * age[i] + beta_smoke * smoke[i] + u[id[i]]
+    }
+    
+    # 随机效应
+    for (j in 1:n_id) {
+        u[j] ~ dnorm(0, tau_u)
+    }
+    
+    # 先验分布
+    alpha ~ dnorm(0, 0.001)          # 截距先验
+    beta_age ~ dnorm(0, 0.001)       # 年龄效应先验
+    beta_smoke ~ dnorm(0, 0.001)     # 吸烟效应先验
+    tau_u ~ dgamma(0.001, 0.001)     # 随机效应精度先验
+    
+    # 计算随机效应标准差
+    sigma_u <- 1/sqrt(tau_u)
+}
+"
+
+# 将模型写入临时文件
+model_file <- tempfile(fileext = ".txt")
+writeLines(model_string, model_file)
+
+# 定义初始值以改善收敛
+inits <- function() {
+  list(
+    alpha = rnorm(1, 0, 1),
+    beta_age = rnorm(1, 0, 1),
+    beta_smoke = rnorm(1, 0, 1),
+    tau_u = rgamma(1, 1, 1),
+    u = rnorm(data_list$n_id, 0, 1)
+  )
+}
+
+# 运行OpenBUGS
+ohio_bugs <- bugs(
+  data = data_list,
+  inits = inits,
+  model.file = model_file,  # 使用临时文件路径
+  parameters.to.save = c("alpha", "beta_age", "beta_smoke", "sigma_u", "u"),
+  n.chains = 3,
+  n.iter = 10000,
+  n.burnin = 2000,
+  n.thin = 2
+)
+
+# 查看结果
+print(ohio_bugs)
+# 查看收敛情况
+print(ohio_bugs$summary[,"Rhat"]) 
+# 诊断
+plot(ohio_bugs)
+```
+
+贝叶斯混合效应逻辑回归分包含年龄和吸烟暴露作为固定效应，以及个体特异性的随机效应。从收敛诊断来看，模型拟合良好：所有参数的Rhat值都等于1，表明MCMC链已充分收敛；有效样本量（n.eff）大多较高，说明采样效率良好。截距项$\alpha$的后验均值为-3.1（95%CI：-3.6到-2.7），表明基线响应概率较低；年龄效应$\beta age$为-0.2（95%CI：-0.3到0.0），暗示年龄增长与响应概率轻微负相关；吸烟效应$\beta smoke$为0.4（95%CI：-0.1到0.9），显示吸烟暴露可能增加响应概率，但置信区间包含0，统计显著性不强。随机效应标准差$\sigma u$为2.2，表明个体间存在相当大的异质性。DIC值为1414，可用于与其他模型进行比较。整体而言，模型成功捕捉了数据中的个体差异和协变量效应。

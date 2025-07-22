@@ -1,0 +1,834 @@
+# CmdStanR 包
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+```
+CmdStanR（Command Stan R）是专为 R 用户设计的轻量级 Stan 接口，CmdStanR 采用了外部进程调用的架构模式。它并不直接从 R 调用任何 C++ 代码，而是依靠后台的 CmdStan 接口作为桥梁。在这种架构下，CmdStanR 负责管理模型的编译过程，调度算法的执行，并处理结果文件的读写操作。这种设计实现了 R 环境与 Stan 计算引擎的解耦，提供了更好的稳定性和可维护性。
+
+CmdStanR 的设计理念体现了现代软件开发的最佳实践，在多个方面展现出显著优势。CmdStanR 与 Stan 的最新版本保持同步更新。由于 RStan 的架构复杂性，跟进 Stan 的版本发布往往需要对 rstan 包进行大量的非平凡修改，并且需要协调 rstan 和 StanHeaders 包的同步发布。而 CmdStanR 通过简单的 cmdstanr::install_cmdstan() 命令就能立即获得 Stan 的最新功能特性。在系统稳定性方面，CmdStanR 通过外部进程运行 Stan 计算，有效减少了意外崩溃的风险，这在 RStudio 等集成开发环境中尤为重要。当 Stan 模型出现问题时，不会影响到整个 R 会话的稳定性。从资源使用角度来看，CmdStanR 具有更低的内存占用开销。由于计算过程在独立的外部进程中进行，避免了在 R 内存空间中维护大量 C++ 对象的需求，这对于处理大规模数据集和复杂模型特别有价值。
+
+## 安装
+
+CmdStan 提供了多种安装方式，用户可以根据自己的操作系统和技术水平选择最适合的安装方法：1. **通过 CmdStanR 自动安装**：最简便的方式，适合 R 用户。2. **通过 Conda 包管理系统安装**：推荐给 Windows 用户使用。3. **从 GitHub 源代码安装**：适合有经验的用户，需要完整的 C++ 编译环境。
+
+### C++ 工具链配置
+
+#### Linux 系统
+
+Linux 系统需要 g++ 4.9.3 或更高版本的编译器和 GNU Make 工具。检查当前版本：
+
+```{bash}
+#| eval: false
+#| echo: true
+g++ --version
+make --version
+```
+
+如果版本不符合要求，可以使用以下命令安装或升级：
+
+```{bash}
+#| eval: false
+#| echo: true
+sudo apt install g++
+sudo apt install make
+```
+
+#### macOS 系统
+
+macOS 需要安装 Xcode 命令行工具。检查是否已安装：
+
+```{bash}
+#| eval: false
+#| echo: true
+clang++ --version
+make --version
+```
+
+如果显示 `command not found`，则需要安装：
+
+```{bash}
+#| eval: false
+#| echo: true
+xcode-select --install
+```
+
+#### Windows 系统
+
+Windows 系统需要 RTools44 工具链，它提供了 g++ 编译器和 make 工具。
+
+**Intel/AMD 64位系统**：
+1. 下载并安装 RTools44
+2. 将以下目录添加到 PATH 环境变量：
+```{tex}
+   - `C:\rtools44\usr\bin`
+   - `C:\rtools44\x86_64-w64-mingw32.static.posix\bin`
+```
+
+**ARM 64位系统**：
+1. 下载并安装 RTools44 - ARM64
+2. 将以下目录添加到 PATH 环境变量：
+
+```{tex}
+   - `C:\rtools44-aarch64\usr\bin`
+   - `C:\rtools44-aarch64\aarch64-w64-mingw32.static.posix\bin`
+```
+
+#### 常见问题解决
+
+##### 编译错误处理
+
+当遇到编译错误时，通常可以通过清理和重新构建来解决：
+
+```{bash}
+#| eval: false
+#| echo: true
+cd <cmdstan-home>
+make clean-all
+make build
+```
+
+#### Windows 特定问题
+
+**工具未识别错误**：
+如果出现 `'g++'`, `'make'` 或 `'cut'` 未识别的错误，请确保已正确配置工具链的 PATH 环境变量。
+
+**路径空格问题**：
+Make 工具在处理包含空格的文件路径时可能失败。建议将 CmdStan 安装在不包含空格的路径中。
+
+通过以上详细的安装指南，用户可以根据自己的需求和技术水平选择最适合的 CmdStan 安装方式，为后续的贝叶斯统计建模工作建立坚实的基础。
+
+### 方式一：通过 CmdStanR 自动安装（推荐）
+
+#### 系统环境准备
+
+CmdStanR 的正常运行依赖于一个功能完整的 CmdStan 安装环境。对于尚未安装 CmdStan 的用户，CmdStanR 提供了便捷的自动化安装功能，但这需要系统具备适当配置的 C++ 工具链支持。
+C++ 工具链的具体配置要求因操作系统而异， Windows、macOS 和 Linux 等主要操作系统的工具链配置需参考完成。
+
+#### 工具链验证
+
+在开始安装 CmdStan 之前，需要验证系统的 C++ 工具链是否正确配置。CmdStanR 提供了专门的验证函数来确保编译环境的完整性：
+
+```{r}
+check_cmdstan_toolchain()
+```
+
+当工具链配置正确时，该函数将返回确认信息：
+
+```{tex}
+The C++ toolchain required for CmdStan is setup properly!
+```
+
+这一验证步骤至关重要，因为不完整的工具链配置可能导致后续安装过程失败或编译错误。
+
+#### CmdStan 安装过程
+
+确认工具链配置无误后，可以使用 CmdStanR 的内置安装函数来自动化安装 CmdStan。该过程将下载最新版本的 CmdStan 源代码并进行本地编译：
+
+```{r}
+#| eval: false
+#| echo: true
+install_cmdstan(cores = 2)
+```
+
+`cores` 参数指定了编译过程中使用的CPU核心数量。适当增加该数值可以加速编译过程，但应根据系统的实际硬件配置进行调整，避免系统资源过载。
+
+#### 路径配置与自动检测
+
+CmdStan 成功安装后，CmdStanR 需要知道其具体的安装位置才能正常工作。为了简化用户操作，CmdStanR 实现了智能的路径自动检测机制，在包加载时按照以下优先级顺序进行路径识别：
+
+**环境变量优先检测**：如果系统中存在名为 "CMDSTAN" 的环境变量，CmdStanR 将自动将其值设置为默认的 CmdStan 路径。这种方式特别适用于 CmdStan 安装在非标准目录的情况。
+
+**默认目录扫描**：当环境变量不存在时，CmdStanR 会在用户主目录中搜索符合 ".cmdstan/cmdstan-[version]" 格式的目录。如果发现多个版本，系统将自动选择版本号最高的安装。
+
+**手动路径设置**：对于需要使用特定 CmdStan 安装的情况，可以手动指定路径：
+
+```{tex}
+set_cmdstan_path(PATH_TO_CMDSTAN)
+```
+
+#### 安装验证
+
+完成安装后，可以使用以下函数验证安装状态：
+
+```{r}
+cmdstan_path()
+cmdstan_version()
+```
+
+### 方式二：通过 Conda 安装
+
+#### Conda 安装概述
+
+Conda 安装方式特别适合 Windows 用户，因为它提供了预编译的 CmdStan 版本以及所有必需的依赖项，包括 C++ 编译器、Make 工具和相关库文件。这种安装方式确保了与 R 和 Python 的 CmdStan 接口的无缝集成，并提供了 `cmdstan_model` 命令来从任何位置激活 CmdStan makefile。
+
+**前提条件**：系统需要预先安装 conda。建议使用 miniforge 发行版。
+
+#### 新环境安装
+
+推荐在新的 conda 环境中安装 CmdStan：
+
+```{bash}
+#| eval: false
+#| echo: true
+conda create -n stan -c conda-forge cmdstan
+```
+
+此命令会创建一个名为 `stan` 的新 conda 环境，并下载安装 cmdstan 包以及 CmdStan 和所需的 C++ 工具链。
+
+#### 现有环境安装
+
+如果要在现有环境中安装，使用以下命令：
+
+```{bash}
+#| eval: false
+#| echo: true
+conda install -c conda-forge cmdstan
+```
+
+#### 环境激活
+
+无论使用哪种安装方法，都必须激活相应的环境：
+
+```{bash}
+#| eval: false
+#| echo: true
+conda activate stan
+```
+
+#### 特定版本安装
+
+默认情况下会安装最新版本的 CmdStan。如果需要特定版本（2.26.1 及更新版本），可以指定版本号：
+
+```{bash}
+#| eval: false
+#| echo: true
+conda install -c conda-forge cmdstan=2.27.0
+```
+
+#### Conda 安装位置
+
+Conda 环境是一个包含特定 Conda 包集合的目录。查看 conda 环境位置：
+
+```{bash}
+#| eval: false
+#| echo: true
+conda info -e
+```
+
+CmdStan 和 C++ 工具链都安装在 conda 环境目录的 `bin` 子目录中，即 `$CONDA_PREFIX/bin/cmdstan`（Linux/macOS）或 `%CONDA_PREFIX%\bin\cmdstan`（Windows）。
+
+### 方式三：从 GitHub 源代码安装
+
+从 GitHub 源代码安装包括以下主要步骤：1. 验证现代 C++ 工具链。2. 从 GitHub 下载 CmdStan 源代码。3. 构建 CmdStan 库和可执行文件。4.通过编译和运行示例模型验证安装
+
+#### 源代码下载
+
+GitHub 源代码分为多个子模块，每个都在独立的仓库中。CmdStan 仓库包含 cmdstan 模块，而 Stan 推理引擎算法和 Stan 数学库函数作为子模块存储在 `stan` 和 `math` 仓库中。
+
+**下载发布版本**：
+最新的 CmdStan 发布版本可从 https://github.com/stan-dev/cmdstan/releases/latest 获取。请确保下载名为 "cmdstan-<版本号>" 的压缩包，而不是页面底部的 "Source Code" 链接。
+
+**克隆开发版本**：
+```{bash}
+#| eval: false
+#| echo: true
+git clone https://github.com/stan-dev/cmdstan.git --recursive
+```
+
+#### 构建 CmdStan
+
+CmdStan 构建过程包括准备可执行程序集合和编译命令行接口及支持库。主要工具包括： **stanc**：Stan 编译器（将 Stan 语言转换为 C++）。**stansummary**：基础后验分析工具。 **diagnose**：基础采样器诊断工具
+
+**构建步骤**：
+
+1. 打开命令行终端，切换到 CmdStan 主目录
+2. 运行 makefile 目标 build：
+
+```{bash}
+#| eval: false
+#| echo: true
+cd <cmdstan-home>
+make build
+```
+
+**并行构建**：
+如果计算机有多个核心和足够的内存，可以并行化构建过程：
+
+```{bash}
+#| eval: false
+#| echo: true
+make -j4 build
+```
+
+**Windows 特殊要求**：
+在 Windows 上，需要确保 Intel TBB 库能被系统找到，这要求将 `<cmdstan-home>/stan/lib/stan_math/lib/tbb` 目录添加到 PATH 环境变量中。可以使用以下命令永久设置：
+
+```{bash}
+#| eval: false
+#| echo: true
+make install-tbb
+```
+
+#### 安装验证
+
+通过编译和运行示例模型来验证安装：
+
+**Linux 和 macOS**：
+```{bash}
+#| eval: false
+#| echo: true
+make examples/bernoulli/bernoulli
+
+# 运行模型
+./examples/bernoulli/bernoulli sample data file=examples/bernoulli/bernoulli.data.json
+
+# 查看结果
+wc -l output.csv
+
+# 汇总参数估计
+bin/stansummary output.csv
+```
+
+**Windows**：
+```{bash}
+#| eval: false
+#| echo: true
+# 编译示例
+make examples/bernoulli/bernoulli.exe
+
+# 运行模型
+./examples/bernoulli/bernoulli.exe sample data file=examples/bernoulli/bernoulli.data.json
+
+# 汇总参数估计
+bin/stansummary.exe output.csv
+```
+
+## 数据集
+还是使用第二章中 STATA 格式的 coronary.dta 数据集。
+```{r}
+coronary <- read_dta("data/coronary.dta") |> 
+  as_factor()
+```
+
+## 单变量贝叶斯线性回归
+建立胆固醇水平与舒张压之间的线性关系模型。Stan模型采用声明式语法，清晰地分离了数据、参数和模型结构的定义。
+```{r}
+# 定义Stan模型
+stan_model_code <- "
+data {
+  int<lower=0> n;          // 样本数量
+  vector[n] y;             // 因变量：胆固醇
+  vector[n] x;             // 自变量：舒张压
+}
+
+parameters {
+  real beta0;              // 截距
+  real beta1;              // 回归系数
+  real<lower=0> sigma;     // 误差标准差
+}
+
+model {
+  // 先验分布
+  beta0 ~ normal(0, 10);   // 截距的弱信息先验
+  beta1 ~ normal(0, 10);   // 系数的弱信息先验
+  sigma ~ exponential(1);   // 标准差的指数先验
+  
+  // 似然函数
+  y ~ normal(beta0 + beta1 * x, sigma);
+}
+
+generated quantities {
+  vector[n] y_rep;         // 后验预测样本
+  vector[n] log_lik;       // 对数似然（用于模型比较）
+  
+  for (i in 1:n) {
+    y_rep[i] = normal_rng(beta0 + beta1 * x[i], sigma);
+    log_lik[i] = normal_lpdf(y[i] | beta0 + beta1 * x[i], sigma);
+  }
+}
+"
+
+# 编译模型
+model_simple <- cmdstan_model(stan_file = write_stan_file(stan_model_code))
+
+# 准备数据
+stan_data_simple <- list(
+  n = nrow(coronary),
+  y = coronary$chol,
+  x = coronary$dbp
+)
+
+# 拟合模型
+fit_simple <- model_simple$sample(
+  data = stan_data_simple,
+  chains = 4,              # 4条MCMC链
+  parallel_chains = 4,     # 并行采样
+  iter_warmup = 1000,      # 预热迭代次数
+  iter_sampling = 2000,    # 采样迭代次数
+  seed = 123,  show_messages = FALSE,  show_exceptions = FALSE,
+  refresh = 0
+)
+```
+
+后验分析与诊断
+使用posterior包进行后验分布的汇总和分析，比传统的coda包提供了更现代化和灵活的功能。
+```{r}
+# 提取后验样本
+draws_simple <- fit_simple$draws()
+
+# 后验汇总统计
+posterior_summary <- summarise_draws(draws_simple)
+posterior_summary <- posterior_summary[posterior_summary$variable %in% c("beta0", "beta1", "sigma"), ]
+
+posterior_summary
+
+# MCMC诊断
+mcmc_trace(draws_simple, pars = c("beta0", "beta1", "sigma")) +
+  theme_minimal() +
+  labs(title = "MCMC轨迹图")
+
+# 后验密度图
+mcmc_dens_overlay(draws_simple, pars = c("beta0", "beta1", "sigma")) +
+  theme_minimal() +
+  labs(title = "后验密度图")
+
+# R-hat诊断
+mcmc_rhat(rhat(draws_simple)) +
+  theme_minimal() +
+  labs(title = "R-hat收敛诊断")
+```
+
+回归参数方面，截距(beta0)的后验均值为2.99，斜率(beta1)的后验均值为0.039，表明舒张压每增加1个单位，胆固醇水平平均增加0.039个单位，显示出正相关关系；不确定性量化方面，各参数的90%CI分别为：截距[2.17, 3.82]，斜率[0.029, 0.049]，残差标准差sigma为1.08[0.99, 1.18]；模型诊断显示所有参数的Rhat值都等于1.00（理想收敛状态），有效样本量(ess_bulk和ess_tail)都在2500-2900之间，远超推荐的最低要求，表明MCMC采样充分且收敛良好，推断结果高度可靠。整体而言，模型成功识别出舒张压对胆固醇水平有显著的正向预测作用。
+
+## 多变量贝叶斯线性回归
+多变量回归模型需要处理多个预测变量，这要求研究者在Stan模型中使用矩阵运算来提高计算效率
+```{r}
+# 多变量回归Stan模型
+stan_model_multi <- "
+data {
+  int<lower=0> n;          // 样本数量
+  int<lower=0> p;          // 预测变量数量
+  matrix[n, p] X;          // 设计矩阵
+  vector[n] y;             // 因变量
+}
+
+parameters {
+  real beta0;              // 截距
+  vector[p] beta;          // 回归系数向量
+  real<lower=0> sigma;     // 误差标准差
+}
+
+model {
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta ~ normal(0, 10);
+  sigma ~ exponential(1);
+  
+  // 似然函数
+  y ~ normal(beta0 + X * beta, sigma);
+}
+
+generated quantities {
+  vector[n] y_rep;
+  vector[n] log_lik;
+  real r_squared;          // 决定系数
+  
+  {
+    vector[n] mu = beta0 + X * beta;
+    real ss_res = 0;
+    real ss_tot = 0;
+    real y_mean = mean(y);
+    
+    for (i in 1:n) {
+      y_rep[i] = normal_rng(mu[i], sigma);
+      log_lik[i] = normal_lpdf(y[i] | mu[i], sigma);
+      ss_res += square(y[i] - mu[i]);
+      ss_tot += square(y[i] - y_mean);
+    }
+    
+    r_squared = 1 - ss_res / ss_tot;
+  }
+}
+"
+
+# 编译多变量模型
+model_multi <- cmdstan_model(stan_file = write_stan_file(stan_model_multi))
+
+# 准备多变量数据
+X_matrix <- as.matrix(coronary[, c("dbp", "bmi", "age")])
+# 标准化数值变量以改善收敛性
+X_matrix[, 1:2] <- scale(X_matrix[, 1:2])
+
+stan_data_multi <- list(
+  n = nrow(coronary),
+  p = ncol(X_matrix),
+  X = X_matrix,
+  y = coronary$chol
+)
+
+# 拟合多变量模型
+fit_multi <- model_multi$sample(
+  data = stan_data_multi,
+  chains = 4,  parallel_chains = 4,  iter_warmup = 1000,
+  iter_sampling = 2000,  seed = 123,  show_messages = FALSE,
+  show_exceptions = FALSE,  refresh = 0
+)
+
+```
+
+```{r}
+# 提取后验样本
+draws_simple <- fit_multi$draws()
+
+# 后验汇总统计
+posterior_summary <- summarise_draws(draws_simple)
+posterior_summary <- posterior_summary[posterior_summary$variable %in% c("beta0", "beta[1]","beta[2]","beta[3]","sigma"), ]
+
+posterior_summary
+
+# MCMC诊断
+mcmc_trace(draws_simple, pars = c("beta0", "beta[1]","beta[2]","beta[3]","sigma")) +
+  theme_minimal() +
+  labs(title = "MCMC轨迹图")
+
+# 后验密度图
+mcmc_dens_overlay(draws_simple, pars = c("beta0", "beta[1]","beta[2]","beta[3]","sigma")) +
+  theme_minimal() +
+  labs(title = "后验密度图")
+
+# R-hat诊断
+mcmc_rhat(rhat(draws_simple)) +
+  theme_minimal() +
+  labs(title = "R-hat收敛诊断")
+```
+
+从后验分布的统计摘要可以看出，所有参数的R-hat值均等于1.00，表明马尔科夫链蒙特卡洛（MCMC）采样达到了良好的收敛状态。有效样本量（ess_bulk和ess_tail）均超过3000，为参数估计提供了充分的精度保证。截距项beta0的后验均值为4.37（90%置信区间：3.54-5.22），代表了当所有预测变量为其参考值时的胆固醇基础水平。
+
+三个回归系数的估计结果显示了不同变量对胆固醇水平的影响程度。标准化后的舒张压系数beta[1]为0.387（90%置信区间：0.257-0.519），表明舒张压与胆固醇水平呈显著正相关关系。体重指数系数beta[2]为-0.087（90%置信区间：-0.209-0.035），其置信区间包含零，提示体重指数与胆固醇的关联性较弱。年龄系数beta[3]为0.039（90%置信区间：0.021-0.056），显示年龄对胆固醇水平有轻微的正向影响。模型的残差标准差sigma估计为1.05，反映了模型预测的不确定性水平适中，整体拟合效果良好。
+
+默认使用了90%CI，使用95%CI的结果将更符合统计学的标准报告格式，能够更准确地反映参数估计的不确定性范围，需要进行如下修改。
+```{r}
+# 获取95%可信区间
+posterior_summary_95 <- fit_multi$draws() %>%
+  summarise_draws(
+    mean, median, sd, mad,
+    q2.5 = ~ quantile(.x, 0.025),
+    q97.5 = ~ quantile(.x, 0.975),
+    rhat, ess_bulk, ess_tail
+  )
+# 查看特定参数的95%可信区间
+posterior_summary_95[posterior_summary_95$variable %in% c("beta0", "beta[1]","beta[2]","beta[3]","sigma"), ]
+```
+
+## 其他常见概率分布实现
+
+### 伯努利分布 - 二分类问题的贝叶斯建模
+
+伯努利分布是处理二分类结果变量的基础分布，特别适用于疾病诊断、治疗效果评估等医学场景。在逻辑回归框架下，通过logit链接函数将线性预测器与概率参数连接起来，实现对二分类结果的概率建模。
+
+```{r}
+#| echo: true
+#| eval: false
+# 逻辑回归：预测是否患有冠心病
+model_bernoulli <- "
+data {
+  int<lower=0> n;
+  array[n] int<lower=0,upper=1> y;  // 二分类结果变量
+  vector[n] age;
+  vector[n] cholesterol;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+}
+
+model {
+  // 似然函数：伯努利分布
+  for (i in 1:n) {
+    y[i] ~ bernoulli_logit(beta0 + beta1 * age[i] + beta2 * cholesterol[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta1 ~ normal(0, 10);
+  beta2 ~ normal(0, 10);
+}
+"
+
+# 示例数据
+stan_data_bern <- list(
+  y = c(0, 1, 0, 1, 1),  # 二分类结果：0=无病，1=有病
+  age = c(45, 60, 35, 70, 55),
+  cholesterol = c(180, 240, 160, 280, 220),
+  n = 5
+)
+```
+
+### 泊松分布 - 计数数据的回归建模
+
+泊松分布专门用于建模计数型数据，如疾病发生次数、事件频率等。通过对数链接函数确保预测的计数值始终为非负数，这在流行病学研究中具有重要的实际意义。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测每月心脏病发作次数
+model_poisson <- "
+data {
+  int<lower=0> n;
+  array[n] int<lower=0> y;  // 计数数据
+  vector[n] pollution;
+  vector[n] temperature;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+}
+
+model {
+  // 似然函数：泊松分布
+  for (i in 1:n) {
+    y[i] ~ poisson_log(beta0 + beta1 * pollution[i] + beta2 * temperature[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta1 ~ normal(0, 10);
+  beta2 ~ normal(0, 10);
+}
+"
+
+# 示例数据
+stan_data_pois <- list(
+  y = c(2, 5, 1, 8, 3),  # 每月发病次数（计数）
+  pollution = c(20, 45, 15, 60, 30),
+  temperature = c(25, 35, 20, 40, 28),
+  n = 5
+)
+```
+
+### 二项分布 - 成功率建模与试验设计
+
+二项分布扩展了伯努利分布的概念，适用于固定试验次数下的成功次数建模。在临床试验中，这种分布常用于分析不同条件下的治疗成功率，为医疗决策提供统计学依据。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测治疗成功率
+model_binomial <- "
+data {
+  int<lower=0> n;
+  array[n] int<lower=0> success;  // 成功次数
+  array[n] int<lower=0> trials;   // 总试验次数
+  vector[n] dose;
+  vector[n] age;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+}
+
+model {
+  // 似然函数：二项分布
+  for (i in 1:n) {
+    success[i] ~ binomial_logit(trials[i], beta0 + beta1 * dose[i] + beta2 * age[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta1 ~ normal(0, 10);
+  beta2 ~ normal(0, 10);
+}
+"
+
+# 示例数据
+stan_data_bin <- list(
+  success = c(8, 15, 12, 18, 10),  # 成功次数
+  trials = c(10, 20, 15, 20, 12),  # 总试验次数
+  dose = c(10, 20, 15, 25, 12),    # 药物剂量
+  age = c(45, 60, 50, 70, 55),
+  n = 5
+)
+```
+
+### Gamma分布 - 正值连续变量的建模
+
+Gamma分布特别适合建模严格为正值的连续变量，如住院时间、康复期长度等。其形状参数和尺度参数的灵活组合能够描述各种右偏分布形态，在医学统计中应用广泛。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测住院时间（只能为正值）
+model_gamma <- "
+data {
+  int<lower=0> n;
+  vector<lower=0>[n] y;  // 正连续变量
+  vector[n] severity;
+  vector[n] comorbidity;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+  real<lower=0> shape;
+}
+
+transformed parameters {
+  vector<lower=0>[n] mu;
+  vector<lower=0>[n] rate;
+
+  for (i in 1:n) {
+    mu[i] = exp(beta0 + beta1 * severity[i] + beta2 * comorbidity[i]);
+    rate[i] = shape / mu[i];
+  }
+}
+
+model {
+  // 似然函数：Gamma分布
+  for (i in 1:n) {
+    y[i] ~ gamma(shape, rate[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta1 ~ normal(0, 10);
+  beta2 ~ normal(0, 10);
+  shape ~ gamma(2, 0.1);
+}
+"
+
+# 示例数据
+stan_data_gamma <- list(
+  y = c(3.5, 7.2, 5.1, 12.8, 4.6),  # 住院天数（正连续）
+  severity = c(2, 4, 3, 5, 2),       # 疾病严重程度
+  comorbidity = c(0, 1, 0, 2, 1),    # 并发症数量
+  n = 5
+)
+```
+
+### Beta分布 - 比例数据的精确建模
+
+Beta分布是处理[0,1]区间内比例数据的理想选择，如治疗依从性、疾病控制率等指标。通过均值和精度的重新参数化，可以更直观地解释回归系数对比例均值的影响效应。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测治疗依从性比例
+model_beta <- "
+data {
+  int<lower=0> n;
+  vector<lower=0,upper=1>[n] y;  // 比例数据
+  vector[n] education;
+  vector[n] support;
+}
+
+parameters {
+  real beta0;
+  real beta1;
+  real beta2;
+  real<lower=0> phi;  // 精度参数
+}
+
+transformed parameters {
+  vector<lower=0,upper=1>[n] mu;
+  vector<lower=0>[n] alpha;
+  vector<lower=0>[n] beta_param;
+
+  for (i in 1:n) {
+    mu[i] = inv_logit(beta0 + beta1 * education[i] + beta2 * support[i]);
+    alpha[i] = mu[i] * phi;
+    beta_param[i] = (1 - mu[i]) * phi;
+  }
+}
+
+model {
+  // 似然函数：Beta分布
+  for (i in 1:n) {
+    y[i] ~ beta(alpha[i], beta_param[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta1 ~ normal(0, 10);
+  beta2 ~ normal(0, 10);
+  phi ~ gamma(2, 0.1);
+}
+"
+
+# 示例数据
+stan_data_beta <- list(
+  y = c(0.8, 0.6, 0.9, 0.4, 0.7),    # 依从性比例（0-1）
+  education = c(12, 16, 18, 10, 14),   # 教育年限
+  support = c(3, 4, 5, 2, 3),         # 社会支持水平
+  n = 5
+)
+```
+
+### 多项分布 - 多类别结果的复杂建模
+
+多项分布处理具有多个互斥类别的结果变量，在疾病分级、治疗方案选择等多分类问题中发挥重要作用。通过softmax变换确保所有类别概率之和为1，同时允许协变量对不同类别概率产生差异化影响。
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测疾病的多种分类结果
+model_multinomial <- "
+data {
+  int<lower=2> K;  // 类别数
+  int<lower=0> n;
+  array[n] vector[K] y;  // 多类别计数
+  vector[n] age;
+}
+
+parameters {
+  vector[K-1] beta0;  // 截距（参考类别除外）
+  vector[K-1] beta1;  // 年龄效应
+}
+
+transformed parameters {
+  array[n] simplex[K] theta;
+
+  for (i in 1:n) {
+    vector[K] alpha;
+    alpha[K] = 0;  // 参考类别
+  
+    for (k in 1:(K-1)) {
+      alpha[k] = beta0[k] + beta1[k] * age[i];
+    }
+  
+    theta[i] = softmax(alpha);
+  }
+}
+
+model {
+  // 似然函数：多项分布
+  for (i in 1:n) {
+    y[i] ~ multinomial(theta[i]);
+  }
+
+  // 先验分布
+  beta0 ~ normal(0, 10);
+  beta1 ~ normal(0, 10);
+}
+"
+
+# 示例数据（3个类别：轻度、中度、重度）
+stan_data_multi <- list(
+  y = array(c(5,3,2, 2,4,4, 7,2,1, 1,5,4, 6,3,1), dim = c(5, 3)),
+  age = c(30, 50, 25, 65, 40),
+  n = 5,
+  K = 3
+)
+```
+
+这些Stan模型展示了不同概率分布在医学统计建模中的具体应用。每种分布都有其独特的数学性质和适用场景，选择合适的分布模型是确保分析结果可靠性的关键步骤。通过贝叶斯框架，研究者不仅能够获得参数的点估计，还能量化估计的不确定性，为决策提供更加全面的统计信息。

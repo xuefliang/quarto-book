@@ -1,0 +1,685 @@
+# 生存模型 
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(survival)
+```
+
+生存分析关注从起始时间点到特定事件发生的时间间隔，其核心在于对**生存函数**和**风险函数**的估计。在贝叶斯框架下，这些估计融入了先验信息，使得在样本量有限或存在审查数据时，推断更为稳健。
+
+生存分析面临的主要挑战是数据审查（censoring）问题，即在研究结束时部分观测对象尚未经历目标事件。贝叶斯方法通过将不完全观测视为模型参数的函数，有效处理了这一问题。
+
+### 贝叶斯推断基础
+
+贝叶斯生存分析的理论基础是贝叶斯定理，它将参数$\theta$的后验分布表示为：
+
+$$p(\theta|D) \propto p(D|\theta)p(\theta)$$
+
+其中$p(D|\theta)$是似然函数，$p(\theta)$是参数的先验分布，$D$代表观测数据。
+
+在生存分析中，通过指定适当的生存时间分布和先验分布，可以构建贝叶斯模型，并通过马尔科夫链蒙特卡洛（MCMC）等方法获取参数后验分布。
+
+## 数学描述
+
+### 1. 生存函数与风险函数
+
+设$T$为非负随机变量，表示直到事件发生的时间，则：
+
+- **生存函数** $S(t)$定义为超过时间$t$的概率：
+
+$$S(t) = P(T > t) = 1 - F(t)$$
+
+其中$F(t)$是累积分布函数。
+
+- **风险函数** $h(t)$（又称瞬时失效率）定义为：
+
+$$h(t) = \lim_{\Delta t \to 0} \frac{P(t \leq T < t + \Delta t | T \geq t)}{\Delta t} = \frac{f(t)}{S(t)}$$
+
+其中$f(t)$是$T$的概率密度函数。
+
+- **累积风险函数** $H(t)$为：
+
+$$H(t) = \int_0^t h(u) du = -\ln S(t)$$
+
+### 2. 非参数贝叶斯生存分析
+
+#### Kaplan-Meier估计的贝叶斯扩展
+
+传统的Kaplan-Meier估计器为：
+
+$$\hat{S}(t) = \prod_{i: t_i \leq t} \left(1 - \frac{d_i}{n_i}\right)$$
+
+其中$t_i$是观测到事件的时间点，$d_i$是时间$t_i$发生事件的数量，$n_i$是时间$t_i$前仍处于风险状态的对象数量。
+
+贝叶斯方法通过引入Dirichlet过程先验，对生存函数进行非参数估计：
+
+$$S(t) \sim DP(\alpha S_0(t))$$
+
+其中$DP$是Dirichlet过程，$\alpha$是精度参数，$S_0(t)$是基准生存函数。
+
+### 3. 半参数贝叶斯生存分析
+
+#### Cox比例风险模型的贝叶斯形式
+
+Cox比例风险模型的风险函数为：
+
+$$h(t|X) = h_0(t)\exp(X\beta)$$
+
+其中$h_0(t)$是基准风险函数，$X$是协变量向量，$\beta$是回归系数向量。
+
+在贝叶斯框架下，为参数$\beta$指定先验分布$p(\beta)$，通常选择多元正态分布：
+
+$$\beta \sim N(\mu_0, \Sigma_0)$$
+
+基准风险函数$h_0(t)$可通过Gamma过程先验进行建模：
+
+$$H_0(t) \sim GP(c H^*_0(t), c)$$
+
+其中$GP$表示Gamma过程，$H^*_0(t)$是先验猜测的累积风险函数，$c$是信度参数。
+
+后验分布通过以下比例关系获得：
+
+$$p(\beta, H_0|D) \propto p(D|\beta, H_0)p(\beta)p(H_0)$$
+
+### 4. 参数贝叶斯生存分析
+
+#### Weibull模型
+
+Weibull分布是参数生存分析中最常用的分布之一，其生存函数为：
+
+$$S(t) = \exp\left(-\left(\frac{t}{\lambda}\right)^k\right)$$
+
+其中$\lambda$是尺度参数，$k$是形状参数。
+
+在贝叶斯Weibull模型中，通常为参数$\lambda$和$k$指定先验分布：
+
+$$\lambda \sim \text{Gamma}(a_{\lambda}, b_{\lambda})$$
+$$k \sim \text{Gamma}(a_k, b_k)$$
+
+考虑协变量效应的Weibull模型，其风险函数为：
+
+$$h(t|X) = \frac{k}{\lambda}\left(\frac{t}{\lambda}\right)^{k-1}\exp(X\beta)$$
+
+其后验分布通过MCMC方法如Gibbs抽样或Metropolis-Hastings算法获得。
+
+### 5. 贝叶斯模型选择与评估
+
+模型选择可通过贝叶斯因子（Bayes Factor）或偏差信息准则（DIC）进行：
+
+$$\text{DIC} = -2\log(p(D|\hat{\theta})) + 2p_D$$
+
+其中$\hat{\theta}$是参数的后验均值，$p_D$是有效参数数量，衡量模型复杂度。
+
+生存模型的预测性能可通过时间依赖的AUC或Brier评分进行评估：
+
+$$\text{Brier}(t) = \frac{1}{n}\sum_{i=1}^n (I(T_i > t) - \hat{S}(t|X_i))^2$$
+
+其中$I(T_i > t)$是指示函数，$\hat{S}(t|X_i)$是个体$i$在时间$t$的预测生存概率。
+
+贝叶斯生存分析通过结合先验信息和数据证据，提供了一个处理生存数据的完整框架。不同于频率派方法，贝叶斯方法直接量化参数不确定性，处理复杂的审查机制，并能自然地进行预测推断。
+
+## 数据
+ACTG320数据集一项双盲对照的艾滋病临床研究，比较了HIV感染者中三药治疗方案和两药标准方法在生存方面的有效性。
+```{r}
+data(ACTG320,package = 'brinla')
+
+var_desc <- data.frame(
+  变量名 = names(ACTG320),
+  描述 = c(
+    "编码",
+    "艾滋病的诊断天数",
+    "定义诊断或死亡的艾滋病事件",
+    "治疗分组",
+    "性别",
+    "基线CD4计数",
+    "之前使用齐多夫定的月数",
+    "年龄"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+### Kaplan-Meier 生存估计
+Kaplan-Meier 生存估计是非参数生存估计。它提供不同时间的生存概率估计值。使用 ，我们可以根据 Kaplan-Meier （KM） 估计生存概率。
+所有患者的生存概率：
+```{r}
+KM <- survival::survfit(survival::Surv(time, censor) ~ 1, 
+              data = ACTG320)
+summary(KM)
+```
+
+```{r}
+# sudo apt-get install -y g++ gcc libc6-dev libstdc++-*-dev
+# BiocManager::install("exactRankTests", lib = Sys.getenv("R_LIBS_USER"),force=TRUE)
+# install.packages("maxstat", lib = Sys.getenv("R_LIBS_USER"))
+# install.packages("survminer", lib = Sys.getenv("R_LIBS_USER"))
+
+survminer::ggsurvplot(KM, 
+           data = ACTG320, 
+           risk.table = TRUE, 
+           linetype = c(1,4),
+           tables.height = 0.3,
+           pval = TRUE)
+```
+
+将估计不同治疗分组的生存概率
+```{r}
+KM_tx <- survival::survfit(survival::Surv(time, censor) ~ tx, 
+              data = ACTG320)
+summary(KM_tx)
+
+survminer::ggsurvplot(KM_tx, 
+           data = ACTG320, 
+           risk.table = TRUE, 
+           linetype = c(1,4),
+           tables.height = 0.3,
+           pval = TRUE)
+```
+
+### Cox 比例风险模型
+
+#### inla实现
+
+```{r}
+formula = inla.surv(time, censor) ~ tx + age + sex + priorzdv
+actg_inla <- inla(formula, family = 'coxph', data = ACTG320, 
+                  control.hazard = list(model = 'rw1', n.intervals = 20))
+summary(actg_inla)
+```
+
+固定效应：治疗效应 (tx1): -0.690 (95%CI: [-1.112, -0.268])，这表明接受治疗(tx=1)的患者相比未接受治疗的患者，风险率降低了约50%，具体计算: exp(-0.690) ≈ 0.50，由于95%CI完全低于0，这一效应具有统计显著性
+年龄效应 (age): 0.021 (95%CI: [0.000, 0.043])，每增加一岁，风险增加约2.1% (exp(0.021) ≈ 1.021)
+95%CI的下限恰好为0，表明这一效应刚好达到统计显著性的边界。其余变量效应不显著。
+随机效应：模型使用了一阶随机游走(RW1)模型对基线风险函数进行平滑。RW1是一种非参数化方法，允许基线风险随时间灵活变化。
+
+分层比例风险模型
+按CD4计数的高低，对不同的感染者进行分层
+```{r}
+# 创建CD4分组变量
+ACTG320 <- ACTG320 %>%
+  mutate(
+    cd4group = cut(
+      cd4,
+      breaks = c(-Inf, quantile(cd4, probs = c(.25, .5, .75), na.rm = TRUE), Inf),
+      labels = c("1", "2", "3", "4"),
+      ordered_result = TRUE
+    ) %>% 
+      as.numeric()
+  )
+
+formula = inla.surv(time, censor) ~ tx + age + sex + priorzdv
+actg_inla_strat <- inla(formula, family = 'coxph', data = ACTG320, 
+                  control.hazard = list(model = 'rw1', n.intervals = 20,strata.name = "cd4group"))
+summary(actg_inla_strat)
+```
+
+分层模型和之前模型结果有所不同，使用bri.basehaz.plot绘制基线风险图。分组的基线风险函数变化是不同。1、2组随时间有下降趋势，3、4组随时间有上升趋势。
+```{r}
+bri.basehaz.plot(actg_inla_strat)
+```
+
+### brms实现
+在brms中，需要主要formula的公式写法有不同。
+```{r} 
+actg_brms <- brm(time | cens(1-censor) ~ tx + age + sex + priorzdv,
+  family = cox(),  data = ACTG320,
+  chains = 4,   iter = 4000,  warmup = 2000,  thin = 2,# 抽样间隔
+  # 先验分布 - 使用默认先验
+  # 设置较弱的先验分布，类似于INLA的默认设置
+  prior = c(prior(normal(0, 5), class = "b")),
+  # 控制参数 - 通过设置基线风险的灵活性
+  control = list(
+    adapt_delta = 0.9,   # 提高适应步长以避免发散转换
+    max_treedepth = 12   # 增加最大树深度
+  ),refresh = 0,silent=TRUE)
+
+# 查看模型摘要
+summary(actg_brms)
+
+# 可视化参数估计
+plot(actg_brms)
+
+# 查看后验分布
+posterior <- as_draws_df(actg_brms)
+
+# 计算风险比（Hazard Ratio）及其95%CI
+posterior_summary <- posterior %>%
+  transmute(
+    tx_hr = exp(b_tx1),
+    age_hr = exp(b_age),
+    sex_hr = exp(b_sex2),
+    priorzdv_hr = exp(b_priorzdv)
+  ) %>%
+  pivot_longer(everything(), names_to = "parameter", values_to = "hazard_ratio") %>%
+  group_by(parameter) %>%
+  summarise(mean_hr = mean(hazard_ratio), median_hr = median(hazard_ratio),
+    ci_lower = quantile(hazard_ratio, 0.025), ci_upper = quantile(hazard_ratio, 0.975))
+
+# 打印风险比结果
+print(posterior_summary)
+```
+
+模型显示治疗组(tx1)相比对照组显著降低了风险率（回归系数=-0.69，95%CI: -1.12到-0.28），对应风险比约为0.50，表明治疗效果显著。年龄呈现轻微增加风险的趋势（系数=0.02），但CI包含0，统计学意义不明确。性别(sex2)和既往ZDV用药史(priorzdv)对风险率的影响均不显著，其95%CI都包含0。
+
+分层比例风险模型,用brms包实现的代码如下：
+```{r}
+# 构建分层 Cox 模型公式
+formula <- bf(
+  time | cens(1-censor) ~ tx + age + sex + priorzdv + (1|cd4group), 
+  family = cox())
+
+actg_brms_strat <- brm(formula = formula,  data = ACTG320,  chains = 4,    
+  iter = 4000,   warmup = 1000,   cores = 4,  seed = 123,refresh = 0,silent=TRUE)
+
+# 查看模型摘要
+summary(actg_brms_strat)
+
+# 可视化固定效应
+plot(actg_brms_strat)
+```
+
+大多数参数的Rhat值仍远超收敛标准（1.14-1.72），有效样本量极低（6-113），表明MCMC链条未能充分混合。模型试图通过CD4组别随机效应控制患者免疫状态的异质性，但收敛失败使得参数估计不可靠。值得注意的是，治疗效应(tx1)的收敛情况相对较好（Rhat=1.14），其估计值(-0.59，95%CI: -1.05到-0.22)提示治疗可能仍有保护作用。
+
+## 参数生存模型
+某些情况下，参数模型可能比 Cox 模型提供优势。除了 Cox 比例风险回归模型之外，还有一类生存模型，称为参数生存模型。
+参数生存模型是指假设生存时间（结果）遵循已知分布的一种模型。参数模型定义了基线风险，基线风险表明应使用哪种模型，例如：Weibull 模型、对数-逻辑模型、对数-正态模型、指数模型、广义伽玛模型。
+
+### 加速失效时间模型（AFT）模型
+
+#### 数据
+间变性少突胶质细胞瘤数据集，是SEER数据库的一部分，包含1824名患者的随访情况。
+```{r}
+AO <- read_csv('data/survivaloa.csv')
+
+var_desc <- data.frame(
+  变量名 = names(AO),
+  描述 = c(
+    "婚姻状况",
+    "性别",
+    "年龄",
+    "手术",
+    "种族",
+    "是否为首次",
+    "生存状态，编码为“1 = 死亡”和“0 = 截尾”",
+    "生存时间，以月为单位"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+AFT模型中生存时间T常见的参数分布有指数分布、Weibull分布、对数正态分布、对数Logistic分布等。
+
+#### inla实现
+family 可以使用 exponential,weibullsurv等，每个生存模型族有不同的超参数结构，对于 Weibull 模型，重要的是 alpha 参数，它控制着分布的形状。
+```{r}
+formula <- inla.surv(survivaltime, status) ~  age + marital + surgery
+ao_inla <- inla(formula,
+                family = 'weibullsurv', 
+                data = AO,
+                control.compute = list(dic = TRUE, waic = TRUE),
+                control.family = list(
+                  hyper = list(alpha = list(prior = "normal", 
+                  param = c(0, 1)))
+                ),
+                control.inla = list(
+                  int.strategy = "eb",
+                  diagonal = 0.1
+                ),
+                control.mode = list(restart = TRUE))
+# ao_inla <- inla(formula,family = 'exponentialsurv', data=AO,control.compute = list(dic=TRUE))
+summary(ao_inla)
+
+#计算贝叶斯Cox-Snell残差
+ao_inla_res <- bri.surv.resid(ao_inla,AO$survivaltime,AO$status)
+bri.csresid.plot(ao_inla_res)
+```
+
+年龄(age): 估计值0.043，为正值且95%CI不包括0，说明随着年龄增加，死亡风险增加（每增加1岁，风险比增加约e^0.043 ≈ 1.044倍）。婚姻状况(marital)中单身系数估计值0.287，95%CI不包括0，与已婚相比风险明显更高（约e^0.287 ≈ 1.332倍）。手术(surgery)，接受手术: -0.507，为负值且95%CI不包括0，说明接受手术显著降低死亡风险（约e^-0.507 ≈ 0.602倍，相当于降低约40%）。
+
+#### brms实现
+brms中使用公式的形式指定
+```{r}
+ao_brms <- brm(
+  formula = survivaltime | cens(1- status) ~ age + marital + surgery,
+  # 指定Weibull分布作为生存分析的分布
+  family = "weibull",  data = AO,
+  # 先验设置，对应INLA中的先验设置,设置Weibull形状参数的先验为正态分布N(0,1)
+  prior = c(prior(normal(0, 1), class = "shape")),
+  chains = 4,   iter = 4000,   warmup = 1000, 
+  cores = parallel::detectCores(), # 使用多核
+  # 计算模型评估指标
+  save_all_pars = TRUE,    # 保存所有参数以便计算WAIC和DIC
+  # 控制采样器
+  control = list(adapt_delta = 0.9, max_treedepth = 12),
+  refresh = 0,silent=TRUE)
+
+summary(ao_brms)
+```
+
+模型存在严重的收敛问题。尽管总抽样数增加到12000次，回归系数的Rhat值仍高达1.59，有效样本量极低（仅7-11），表明这些参数的MCMC采样未能收敛。然而，Weibull分布的形状参数收敛情况相对较好（Rhat=1.14），估计值为0.81（95%CI:0.77-0.87），小于1表明风险率随时间递减。在回归系数中，年龄显示负向效应（-0.48），单身状态也呈现负向影响（-0.64），但由于收敛问题，这些估计的可靠性存疑。模型的根本收敛问题可能源于数据结构或模型设定的复杂性，建议重新考虑模型规格或采用更强的先验信息来改善收敛性。
+
+### 纵向数据和生存数据的联合模型
+
+将线性混合效应模型的概率分布与随机效应（处理纵向数据）和生存 Cox 模型（从截尾数据计算事件的危险比）结合起来。
+
+#### 数据
+收集了纵向和生存数据，以比较两种抗逆转录病毒药物在治疗对齐多夫定（AZT）疗法失败或不耐受的患者的疗效和安全性,包括1405个记录和 12个变量。
+```{r}
+data('aids',package = 'JM')
+
+var_desc <- data.frame(
+  变量名 = names(aids),
+  描述 = c(
+    "病例编号",
+    "死亡或终止时长",
+    "死亡情况 数值向量 其中 0 表示截尾1 表示死亡",
+    "CD4 细胞计数",
+    "记录CD4细胞计数的时间点",
+    "分组，ddC 表示扎西替韦，ddI 表示依非韦伦",
+    "性别",
+    "因子变量AIDS表示研究开始时的先前机会性感染AIDS，noAIDS表示先前未感染",
+    "水平分为 intolerance 和 failure，分别表示 AZT 不耐受和 AZT 失败",
+    "开始",
+    "停止",
+    "事件"
+  )
+)
+
+format_kable_table(var_desc)
+```
+
+#### inla 实现
+
+```{r}
+#' 使用INLA拟合联合模型
+#'
+#' @param long_data 纵向数据框
+#' @param surv_data 生存数据框
+#' @param long_formula 纵向子模型公式，例如 CD4 ~ obstime + obstime:drug
+#' @param surv_formula 生存子模型公式，例如 Surv(Time, death) ~ drug
+#' @param id_var 标识个体的变量名
+#' @param time_var 时间变量名
+#' @param event_var 事件变量名
+#' @param surv_time_var 生存时间变量名
+#' @param random_slope 随机斜率变量，默认为时间变量
+#' @param control_compute INLA计算控制参数
+#'
+#' @return INLA模型拟合对象
+#' @export
+#'
+fit_joint_inla <- function(
+  long_data,
+  surv_data,
+  long_formula,
+  surv_formula,
+  id_var,
+  time_var,
+  event_var,
+  surv_time_var = NULL,
+  random_slope = NULL,
+  control_compute = list(dic = TRUE)
+) {
+  # 提取公式变量
+  long_terms <- terms(long_formula)
+  long_vars <- all.vars(long_formula)
+  response_var <- long_vars[1]
+
+  surv_terms <- terms(surv_formula)
+  surv_vars <- all.vars(surv_formula)[-c(1:2)] # 排除Surv函数的两个参数
+
+  if (is.null(surv_time_var)) {
+    surv_time_var <- all.vars(surv_formula)[1]
+  }
+
+  if (is.null(random_slope)) {
+    random_slope <- time_var
+  }
+
+  # 基本信息
+  n1 <- nrow(long_data)
+  n2 <- nrow(surv_data)
+
+  # 获取唯一ID并创建映射
+  unique_ids <- unique(long_data[[id_var]])
+  n_ids <- length(unique_ids)
+  id_map <- data.frame(
+    original_id = unique_ids,
+    numeric_id = 1:n_ids
+  )
+
+  # 为长期数据添加数值ID
+  long_data$numeric_id <- id_map$numeric_id[match(
+    long_data[[id_var]],
+    id_map$original_id
+  )]
+
+  # 为生存数据添加数值ID
+  surv_data$numeric_id <- id_map$numeric_id[match(
+    surv_data[[id_var]],
+    id_map$original_id
+  )]
+
+  # 准备响应变量
+  y_long <- c(long_data[[response_var]], rep(NA, n2))
+  y_surv <- inla.surv(
+    time = c(rep(NA, n1), surv_data[[surv_time_var]]),
+    event = c(rep(NA, n1), surv_data[[event_var]])
+  )
+  Y_joint <- list(y_long, y_surv)
+
+  # 准备固定效应协变量
+  linear_cov_data <- data.frame(
+    mu = as.factor(c(rep(1, n1), rep(2, n2))) # 模型类型标识
+  )
+
+  # 添加纵向变量
+  long_pred_vars <- long_vars[-1] # 除去响应变量
+  for (var in long_pred_vars) {
+    if (var %in% names(long_data)) {
+      linear_cov_data[[paste0("l.", var)]] <- c(long_data[[var]], rep(0, n2))
+    } else {
+      # 处理交互项，格式如 "obstime:drug"
+      if (grepl(":", var)) {
+        var_parts <- strsplit(var, ":")[[1]]
+        if (all(var_parts %in% names(long_data))) {
+          interaction_var <- long_data[[var_parts[1]]] *
+            long_data[[var_parts[2]]]
+          linear_cov_data[[paste0("l.", var)]] <- c(interaction_var, rep(0, n2))
+        }
+      }
+    }
+  }
+
+  # 添加生存变量
+  for (var in surv_vars) {
+    if (var %in% names(surv_data)) {
+      linear_cov_data[[paste0("s.", var)]] <- c(rep(0, n1), surv_data[[var]])
+    }
+  }
+
+  # 准备随机效应协变量
+  random_cov_data <- list(
+    U11 = c(long_data$numeric_id, rep(NA, n2)), # 随机截距
+    U21 = c(long_data$numeric_id, rep(NA, n2)), # 随机斜率
+    U12 = c(rep(NA, n1), surv_data$numeric_id), # 生存随机截距
+    U22 = c(rep(NA, n1), surv_data$numeric_id) # 生存随机斜率
+  )
+
+  # 合并数据
+  joint_data <- c(linear_cov_data, random_cov_data)
+  joint_data$Y <- Y_joint
+
+  # 构建公式字符串
+  fixed_effects <- paste(names(linear_cov_data)[-1], collapse = " + ")
+  formula_str <- paste(
+    "Y ~ mu +",
+    fixed_effects,
+    "- 1 + 
+f(U11, model = 'iid2d', n = 2*n_ids) + 
+f(U21, l.",
+    random_slope,
+    ", copy = 'U11') +
+f(U12, copy = 'U11', fixed = FALSE) + 
+f(U22, copy = 'U11', fixed = FALSE)",
+    sep = ""
+  )
+
+  # 转换为公式对象
+  formula <- as.formula(formula_str)
+
+  # 拟合联合模型
+  joint_inla <- inla(
+    formula,
+    family = c("gaussian", "exponentialsurv"),
+    data = joint_data,
+    control.compute = control_compute
+  )
+
+  # 添加有用的元数据以便后续解释
+  attr(joint_inla, "long_formula") <- long_formula
+  attr(joint_inla, "surv_formula") <- surv_formula
+  attr(joint_inla, "id_map") <- id_map
+  attr(joint_inla, "joint_data") <- joint_data
+
+  return(joint_inla)
+}
+
+#' 打印联合模型摘要
+#'
+#' @param joint_model 从fit_joint_inla返回的联合模型对象
+#' @param digits 四舍五入的小数位数
+#'
+#' @return 打印模型摘要并不可见地返回模型对象
+#' @export
+#'
+print_joint_summary <- function(joint_model, digits = 4) {
+  cat("== 联合模型摘要 ==\n\n")
+
+  cat("纵向子模型: ", deparse(attr(joint_model, "long_formula")), "\n")
+  cat("生存子模型: ", deparse(attr(joint_model, "surv_formula")), "\n\n")
+
+  cat("-- 固定效应 --\n")
+  fixed_summary <- round(joint_model$summary.fixed, digits)
+  # 将变量名分组为纵向和生存
+  long_vars <- rownames(fixed_summary)[grep("^l\\.", rownames(fixed_summary))]
+  surv_vars <- rownames(fixed_summary)[grep("^s\\.", rownames(fixed_summary))]
+
+  if (length(long_vars) > 0) {
+    cat("\n纵向部分:\n")
+    print(fixed_summary[long_vars, ])
+  }
+
+  if (length(surv_vars) > 0) {
+    cat("\n生存部分:\n")
+    print(fixed_summary[surv_vars, ])
+  }
+
+  cat("\n-- 超参数 --\n")
+  print(round(joint_model$summary.hyper, digits))
+
+  cat("\n-- 模型拟合 --\n")
+  cat("DIC:", round(joint_model$dic$dic, digits), "\n")
+
+  invisible(joint_model)
+}
+
+# 准备数据
+data('aids.id',package = 'JM')
+data('aids',package = 'JM')
+
+joint_fit <- fit_joint_inla(
+  long_data = aids,
+  surv_data = aids.id,
+  long_formula = CD4 ~ obstime + obstime:drug,
+  surv_formula = Surv(Time, death) ~ drug,
+  id_var = "patient",
+  time_var = "obstime",
+  event_var = "death"
+)
+
+print_joint_summary(joint_fit)
+```
+
+固定效应纵向部分：时间效应(l.obstime)：-0.2488（95%CI: -0.3358至-0.1634）,表明CD4细胞计数随时间显著下降，平均每单位时间减少约0.25个单位,这个负效应有显著性，95%CI不包含零。药物效应(l.drug)：0.5436（95%CI: 0.0140至1.0732），药物效应具有统计学显著性。药物对生存的影响(s.drug)：0.1896 95%CI包括0，表明药物效果不确定。随机效应精度：U11组件：表示个体间截距（基线CD4水平）的变异，个体水平的变异相当显著。Beta for U12和U22（约为-0.61）为负值表明CD4细胞计数和生存风险存在负相关，即CD4细胞计数较高的患者死亡风险较低
+
+#### brms 实现
+```{r}
+# 数据准备 - 合并纵向数据和生存数据
+# 创建联合建模所需的数据集
+joint_data <- aids %>% 
+  left_join(aids.id, by = "patient", suffix = c("", ".surv"))
+
+# 确认数据框中的变量
+names(joint_data)
+
+# 设置brms的控制参数，确保模型收敛
+control_params <- list(
+  adapt_delta = 0.95,    # 提高适应步长以避免发散
+  max_treedepth = 15     # 增加最大树深度
+)
+
+# 使用brms进行联合建模
+joint_model <- brm(
+  mvbf(
+    # 纵向子模型
+    bf(CD4 ~ obstime + drug * obstime + (1 + obstime | patient)) + gaussian(),
+    # 生存子模型 - 使用Weibull分布而非Cox，更适合brms
+    bf(Time | cens(event) ~ drug + gender + prevOI) + weibull()
+  ) + set_rescor(FALSE),  # 不估计响应变量间的相关性
+  data = joint_data,  chains = 4, iter = 2000, warmup = 1000, cores = 4,
+  control = list(adapt_delta = 0.95),refresh = 0,silent=TRUE
+)
+
+# 查看模型摘要
+summary(joint_model)
+```
+
+贝叶斯联合模型同时分析CD4细胞计数的纵向变化和生存时间。模型基于1405个观测值，涵盖467名患者，所有参数的Rhat值均接近1.00，有效样本量充足，表明MCMC采样收敛良好。纵向子模型显示CD4计数随时间显著下降（斜率-0.16），患者间基线CD4水平和变化率存在显著个体差异（随机效应标准差分别为4.60和0.17），且两者呈轻微负相关（-0.15）。ddI药物治疗在基线上显示数值上的改善（0.47）但CI包含0，其与时间的交互作用不显著。生存子模型采用Weibull分布，形状参数为5.24表明风险率随时间递增。ddI治疗对生存时间无显著影响（0.00），男性患者生存时间略长但边界显著（0.04），而既往机会性感染史显著缩短生存时间（-0.05）。该联合模型为理解CD4轨迹与生存结局的关联提供了可靠的统计框架。
+
+#### inlabru 实现
+通过共享随机效应 u0 将纵向过程和生存过程联系起来。
+```{r}
+aids <- aids %>% 
+  mutate(patient = as.numeric(patient))
+
+aids.id <- aids.id %>% 
+  mutate(patient = as.numeric(patient))
+
+# 定义模型组件
+components <- ~ 
+  # 纵向模型组件
+  beta0(1) +  # 截距
+  beta1(obstime) +  # 时间效应
+  beta2(drug, model = "factor_contrast") + # 药物效应
+  beta3(obstime, group = drug, model = "iid") +  # 交互效应
+  u0(patient, model = "iid") +  # 随机截距
+  u1(patient, model = "iid") +  # 随机斜率 +
+  
+  # 生存模型组件
+  gamma0(1) +  # 生存模型截距
+  gamma1(drug, model = "factor_contrast") +  # 药物对生存的效应
+  gamma2(gender, model = "factor_contrast") +  # 性别效应
+  gamma3(prevOI, model = "factor_contrast")  # 既往感染效应
+
+# 使用不同的语法定义联合模型
+aids_joint <- bru(components,
+                  # 纵向数据
+                  like(CD4 ~ beta0 + beta1 + beta2 + beta3 + u0 + u1, 
+                       family = "gaussian", 
+                       data = aids),
+                  
+                  # 生存数据
+                  like(inla.surv(Time, event) ~ gamma0 + gamma1 + gamma2 + gamma3 + u0, 
+                       family = "weibullsurv", 
+                       data = aids.id),
+                  
+                  options = list(verbose = FALSE)
+)
+
+summary(aids_joint)
+```
+
+通过共享随机效应将AIDS患者的CD4细胞计数变化轨迹与生存时间联系起来。纵向部分显示CD4计数随时间显著下降（β1=-0.148，95%CI:-0.172to-0.124），基线CD4水平为6.92；生存部分的Weibull模型显示较低的基线风险（γ0 =-3.062）和moderate的形状参数（α=0.796）。关键的是，患者特异性随机截距（u0）在两个子模型中都发挥作用，实现了真正的联合建模即CD4水平较高/下降较慢的患者往往有更长的生存时间。模型的超参数显示纵向模型有适度的观测精度（0.260），而各随机效应的精度差异很大，其中u0和β3的精度极高（>20,000），表明个体间差异相对较小，而u1的精度较低（0.050），显示患者间斜率变异较大。模型拟合良好，总运行时间仅0.83秒，有效参数数约365-439个。

@@ -1,0 +1,23 @@
+
+model {
+  # 似然函数
+  for (i in 1:n) {
+    y[i] ~ dbern(prob[i])
+    logit(prob[i]) <- beta0 + sum(beta[1:p] * X[i,1:p])
+  }
+  
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  
+  for (j in 1:p) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+  
+  # 派生量 - 预测准确率
+  for (i in 1:n) {
+    y_pred[i] <- step(prob[i] - 0.5)
+    correct[i] <- equals(y[i], y_pred[i])
+  }
+  accuracy <- mean(correct[])
+}
+

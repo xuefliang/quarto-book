@@ -1,0 +1,538 @@
+# RJAS 包
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(rjags)
+library(coda)
+library(lattice)
+```
+
+## RJAS包安装
+
+rjags包是JAGS库的一个接口。要构建二进制包或从源码安装，必须先安装匹配的JAGS库。
+
+### Windows系统
+
+若在Windows上从源码编译rjags包，需通过make变量JAGS_ROOT指定JAGS路径，即在HOME/.R/Makevars.win文件中定义，例如：
+
+```{tex}
+#| eval: false
+JAGS_ROOT=c:/Progra~1/JAGS/JAGS-4.0.0
+```
+
+其中HOME是从开始菜单启动R会话时的默认起始目录（通常是的文档文件夹）。若安装Windows预编译版rjags包，R将通过注册表查找JAGS位置。也可通过设置环境变量JAGS_HOME指定JAGS路径。
+
+### Unix/Linux：pkg-config工具
+
+若已安装pkg-config，配置脚本将用它检测JAGS库并设置rjags的编译链接参数。
+可在Unix终端输入以下命令测试：
+
+```{tex}
+pkg-config --modversion jags
+```
+
+若未检测到JAGS安装，说明'jags.pc'文件不在pkg-config搜索路径中。
+此时应通过设置PKG_CONFIG_PATH环境变量添加路径。例如若完整路径为
+'/usr/local/lib64/pkgconfig/jags.pc'，则执行：
+
+```{tex}
+export PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig
+```
+
+后再安装rjags。多数Linux发行版将软件分为"用户版"和"开发版"，若使用预编译的JAGS二进制包，请先安装开发版再尝试安装rjags包。虽然pkg-config帮助在编译时找到链接JAGS库的正确参数，但无法解决运行时链接问题。为检测潜在问题，rjags的配置脚本会编译运行一个链接JAGS库的测试程序。若出现"runtime
+link error"，
+可采取以下措施：若有管理员权限（sudo或root权限）：将含JAGS库的目录添加到链接器路径，通常通过编辑/etc/ld.so.conf实现,若目录已在链接器路径中，可能需要以root身份运行/sbin/ldconfig更新缓存。若无管理员权限：
+安装rjags前设置LD_RUN_PATH环境变量指向JAGS库目录，或使用--enable-rpath选项安装：
+终端执行：
+
+```{tex}
+R CMD INSTALL
+--configure-args='--enable-rpath' rjags
+```
+
+或R环境中：
+
+```{tex}
+install.packages("rjags", configure.args="--enable-rpath")
+```
+
+还可考虑：
+设置LD_LIBRARY_PATH指向JAGS库目录。注意此方法需要LD_LIBRARY_PATH需在每次加载rjags包时设置，建议写入.bash_profile（或其他shell的等效文件）
+
+### Unix/Linux：传统配置
+
+当未安装pkg-config或检测失败时使用传统配置。该方法已弃用，将在未来版本移除。若遇到安装问题，强烈建议修复pkg-config而非使用本方案。配置脚本会尝试推测JAGS库位置，通过查询R和jags可执行文件实现，因此两者都需在PATH环境变量中才能正确自动检测。若JAGS安装在非标准路径，可能需要通过配置参数或环境变量提供提示（见下表）：
+
+| JAGS配置选项 |     rjags配置选项      | 环境变量        |       默认值       |
+|:-------------|:----------------------:|:----------------|:------------------:|
+| --prefix     |   --with-jags-prefix   | JAGS_PREFIX     |     /usr/local     |
+| --libdir     |   --with-jags-libdir   | JAGS_LIBDIR     | ${prefix}/${LIBnn} |
+| --includedir | --with-jags-includedir | JAGS_INCLUDEDIR | \${prefix}/include |
+
+LIBnn默认值为`R CMD config LIBnn`的输出，可通过设置LIBnn环境变量覆盖。
+
+### 设置prefix前缀
+
+默认所有JAGS文件安装在/usr/local的子目录中。这是安装前缀，安装JAGS时可通过--prefix参数修改。jags脚本位于\${prefix}/bin，可执行文件位于\${prefix}/libexec，库文件位于\${prefix}/lib，模块位于\${prefix}/lib/JAGS，头文件位于\${prefix}/include/JAGS。假设安装JAGS时使用'--prefix=/opt'参数，若/opt/bin在PATH中，配置脚本应能自动检测JAGS。否则安装rjags时需要指定'--with-jags-prefix=/opt'参数。也可在构建rjags前设置环境变量：export JAGS_PREFIX=/opt
+
+### 设置库目录
+
+假设在64位系统上将JAGS库安装在/usr/local/lib64而非默认路径。若R_HOME为/usr/lib64/R，配置脚本应能自动定位。否则安装rjags时需要指定'--with-jags-libdir=/usr/local/lib64'。替代方案：'export JAGS_LIBDIR=/usr/local/lib64'，若库目录前缀正确但名称不同（如${prefix}/lib64或${prefix}/lib32），只需设置LIBnn变量：export LIBnn=lib64。
+
+### 设置包含目录
+
+通常无需修改包含目录，因无理由更改默认设置。此处仅为完整性说明。默认头文件位于\${prefix}/include/JAGS子目录。若安装JAGS时通过--includedir参数指定了其他位置，则对应rjags参数为--with-jags-includedir。也可设置JAGS_INCLUDEDIR环境变量。
+
+### 传递配置参数
+
+通过R CMD INSTALL的--configure-args参数传递：
+
+```{tex}
+R CMD INSTALL --configure-args='--with-jags...'
+```
+
+或在R会话中使用install.packages()函数的configure.args参数：
+
+```{tex}
+install.packages("rjags", configure.args="--with-jags...")
+```
+
+配置参数会覆盖对应的环境变量设置。
+
+## 数据集
+还是使用第二章中 STATA 格式的 coronary.dta 数据集。
+```{r}
+coronary <- read_dta("data/coronary.dta") |> 
+  as_factor()
+```
+
+### 单变量分析
+
+```{r}
+# 准备数据列表给JAGS
+jags_data <- list(
+  y = coronary$chol,
+  x = coronary$dbp,
+  n = nrow(coronary)
+)
+
+# 定义贝叶斯线性回归模型
+model_string <- "
+model {
+  # 似然函数 - 线性回归
+  for (i in 1:n) {
+    y[i] ~ dnorm(mu[i], tau)  # 正态分布
+    mu[i] <- beta0 + beta1 * x[i]  # 线性关系
+  }
+  
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)      # 截距的正态先验
+  beta1 ~ dnorm(0, 0.001)      # 斜率的正态先验
+  tau ~ dgamma(0.001, 0.001)   # 精度参数的伽马先验
+  
+  # 计算标准差（可选，用于解释）
+  sigma <- 1/sqrt(tau)
+}
+"
+
+# 将模型写入临时文件
+writeLines(model_string, "bayes_linear_regression.txt")
+
+# 初始化JAGS模型
+jags_model <- jags.model(
+  file = "bayes_linear_regression.txt",
+  data = jags_data,
+  n.chains = 3,  # 3条马尔科夫链
+  quiet = TRUE
+)
+
+# 预热(burn-in)
+update(jags_model, n.iter = 1000, progress.bar = "text")
+
+# MCMC采样
+samples <- coda.samples(
+  model = jags_model,
+  variable.names = c("beta0", "beta1", "sigma"),  # 添加sigma参数
+  n.iter = 5000,
+  thin = 5  # 稀疏采样，每5个样本取1个
+)
+
+```
+
+自定义一个后验分析函数，方便结果展示
+```{r}
+analyze_posterior <- function(samples, ci_level = 0.95, digits = 3, 
+                              return_summary = TRUE, plot = FALSE) {
+  
+  # 输入检查
+  if (!inherits(samples, c("mcmc", "mcmc.list"))) {
+    stop("samples must be of class 'mcmc' or 'mcmc.list'")
+  }
+  
+  if (ci_level <= 0 || ci_level >= 1) {
+    stop("ci_level must be between 0 and 1")
+  }
+  
+  # 提取后验样本
+  posterior_samples <- as.matrix(samples)
+  
+  # 计算CI的分位数
+  alpha <- 1 - ci_level
+  probs <- c(alpha/2, 1 - alpha/2)
+  
+  # 计算后验统计量
+  posterior_mean <- apply(posterior_samples, 2, mean)
+  posterior_median <- apply(posterior_samples, 2, median)
+  posterior_sd <- apply(posterior_samples, 2, sd)
+  credible_intervals <- apply(posterior_samples, 2, quantile, probs, na.rm = TRUE)
+  
+  # 计算其他有用统计量
+  effective_size <- coda::effectiveSize(samples)
+  
+  # 创建汇总表格
+  if (return_summary) {
+    summary_table <- data.frame(
+      Parameter = names(posterior_mean),
+      Mean = round(posterior_mean, digits),
+      Median = round(posterior_median, digits),
+      SD = round(posterior_sd, digits),
+      Lower_CI = round(credible_intervals[1, ], digits),
+      Upper_CI = round(credible_intervals[2, ], digits),
+      Eff_Size = round(effective_size, 0),
+      stringsAsFactors = FALSE
+    )
+    
+    # 重命名CI列
+    names(summary_table)[5:6] <- paste0(c("Lower_", "Upper_"), 
+                                        sprintf("%.1f%%", c(alpha/2, 1-alpha/2) * 100))
+  }
+  
+  # 输出结果
+  cat("=== 贝叶斯后验分析结果 ===\n")
+  cat(sprintf("置信水平: %d%%\n", ci_level * 100))
+  cat(sprintf("参数数量: %d\n", length(posterior_mean)))
+  cat(sprintf("样本数量: %d\n\n", nrow(posterior_samples)))
+  
+  if (return_summary) {
+    cat("汇总统计表:\n")
+    print(summary_table, row.names = FALSE)
+  } else {
+    cat("后验均值:\n")
+    print(round(posterior_mean, digits))
+    cat("\n后验中位数:\n")
+    print(round(posterior_median, digits))
+    cat("\n后验标准差:\n")
+    print(round(posterior_sd, digits))
+    cat(sprintf("\n%d%% 可信区间:\n", ci_level * 100))
+    print(round(credible_intervals, digits))
+  }
+  
+  # 可选绘图
+  if (plot) {
+    if (requireNamespace("coda", quietly = TRUE)) {
+      coda::densplot(samples, main = "后验密度图")
+    } else {
+      warning("需要安装 'coda' 包来绘图")
+    }
+  }
+  
+  # 返回结果
+  result <- list(
+    mean = posterior_mean,
+    median = posterior_median,
+    sd = posterior_sd,
+    ci = credible_intervals,
+    effective_size = effective_size,
+    samples = posterior_samples
+  )
+  
+  if (return_summary) {
+    result$summary_table <- summary_table
+  }
+  
+  invisible(result)
+}
+```
+
+后验结果
+```{r}
+analyze_posterior(samples)
+```
+
+截距(beta0)：后验均值为3.05，95%CI为[2.09, 4.06]。斜率(beta1)：后验均值为0.038，95%CI为[0.026, 0.050]，表明舒张压每增加1个单位，胆固醇水平平均增加0.038个单位
+残差标准差(sigma)：后验均值为1.08，95%CI为[0.98, 1.19]
+诊断结果：Gelman诊断的潜在尺度缩减因子(PSRF)都接近1.0（小于1.1），表明MCMC链已经收敛结果可靠，说明舒张压与胆固醇水平之间的正相关关系。
+
+### 多变量分析
+```{r}
+# 准备数据
+n <- nrow(coronary)
+X <- cbind(coronary$dbp, coronary$bmi, coronary$race)  
+colnames(X) <- c("x1", "x2", "x3")
+
+jags_data_multi <- list(
+  y = coronary$chol,  # 连续变量
+  X = X,
+  n = n,
+  p = ncol(X)
+)
+
+# 线性回归模型（正态分布）
+model_linear <- "
+model {
+  # 似然函数 - 正态分布用于连续变量
+  for (i in 1:n) {
+    y[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0 + sum(beta[1:p] * X[i,1:p])
+  }
+  
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  
+  for (j in 1:p) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+  
+  # 误差精度的先验
+  tau ~ dgamma(0.001, 0.001)
+  sigma <- 1/sqrt(tau)  # 标准差
+  
+  # 模型拟合度
+  for (i in 1:n) {
+    residual[i] <- y[i] - mu[i]
+    sq_residual[i] <- pow(residual[i], 2)
+  }
+  mse <- mean(sq_residual[])
+}
+"
+
+writeLines(model_linear, "linear_regression.txt")
+
+# 运行线性回归模型
+jags_linear <- jags.model("linear_regression.txt", jags_data_multi, n.chains = 3)
+update(jags_linear, 1000)
+
+samples <- coda.samples(
+  jags_linear, 
+  c("beta0", "beta", "sigma", "mse"), 
+  5000
+)
+```
+
+```{r}
+# 诊断图
+#plot(samples)
+
+# 检查收敛性
+gelman.diag(samples)
+
+# 自相关图
+#autocorr.plot(samples)
+
+# 轨迹图
+traceplot(samples)
+
+analyze_posterior(samples)
+```
+
+模型收敛性良好，Gelman-Rubin统计量均接近1.0，表明三条马尔科夫链已达到稳定状态。回归系数的后验估计表明：舒张压每增加1个单位，胆固醇水平平均增加0.030个单位(95%可信区间: 0.018-0.042)；体重指数的影响为负但不显著(-0.038, 95%CI: -0.095至0.020，包含0)；种族变量显示显著正效应(0.358, 95%CI: 0.171-0.544)。模型拟合度方面，均方误差为1.078，残差标准差为1.042，说明模型具有合理的预测精度。需要注意的是，beta2和beta0(截距)的有效样本量较低(分别为43和33)，提示这些参数的后验估计可能需要更多MCMC样本来获得更稳定的结果，但整体模型为理解这些生理指标与胆固醇水平的关系提供了有价值的贝叶斯推断。
+
+### 在JAGS中使用其他概率分布的示例：
+
+#### 伯努利分布 (dbern) - 二分类问题
+
+```{r}
+#| echo: true
+#| eval: false
+# 逻辑回归：预测是否患有冠心病
+model_bernoulli <- "
+model {
+  for (i in 1:n) {
+    # 伯努利分布：结果变量只能是0或1
+    y[i] ~ dbern(p[i])
+    logit(p[i]) <- beta0 + beta1 * age[i] + beta2 * cholesterol[i]
+  }
+
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  beta1 ~ dnorm(0, 0.001)
+  beta2 ~ dnorm(0, 0.001)
+}
+"
+
+# 示例数据
+jags_data_bern <- list(
+  y = c(0, 1, 0, 1, 1),  # 二分类结果：0=无病，1=有病
+  age = c(45, 60, 35, 70, 55),
+  cholesterol = c(180, 240, 160, 280, 220),
+  n = 5
+)
+```
+
+#### 泊松分布 (dpois) - 计数数据
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测每月心脏病发作次数
+model_poisson <- "
+model {
+  for (i in 1:n) {
+    # 泊松分布：非负整数计数
+    y[i] ~ dpois(lambda[i])
+    log(lambda[i]) <- beta0 + beta1 * pollution[i] + beta2 * temperature[i]
+  }
+
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  beta1 ~ dnorm(0, 0.001)
+  beta2 ~ dnorm(0, 0.001)
+}
+"
+
+# 示例数据
+jags_data_pois <- list(
+  y = c(2, 5, 1, 8, 3),  # 每月发病次数（计数）
+  pollution = c(20, 45, 15, 60, 30),
+  temperature = c(25, 35, 20, 40, 28),
+  n = 5
+)
+```
+
+####  二项分布 (dbin) - 成功次数
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测治疗成功率
+model_binomial <- "
+model {
+  for (i in 1:n) {
+    # 二项分布：trials次试验中的成功次数
+    success[i] ~ dbin(p[i], trials[i])
+    logit(p[i]) <- beta0 + beta1 * dose[i] + beta2 * age[i]
+  }
+
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  beta1 ~ dnorm(0, 0.001)
+  beta2 ~ dnorm(0, 0.001)
+}
+"
+
+# 示例数据
+jags_data_bin <- list(
+  success = c(8, 15, 12, 18, 10),  # 成功次数
+  trials = c(10, 20, 15, 20, 12),  # 总试验次数
+  dose = c(10, 20, 15, 25, 12),    # 药物剂量
+  age = c(45, 60, 50, 70, 55),
+  n = 5
+)
+```
+
+####  Gamma分布 (dgamma) - 正值连续变量
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测住院时间（只能为正值）
+model_gamma <- "
+model {
+  for (i in 1:n) {
+    # Gamma分布：正连续变量
+    y[i] ~ dgamma(shape, rate[i])
+    rate[i] <- shape / mu[i]  # 参数化
+    log(mu[i]) <- beta0 + beta1 * severity[i] + beta2 * comorbidity[i]
+  }
+
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  beta1 ~ dnorm(0, 0.001)
+  beta2 ~ dnorm(0, 0.001)
+  shape ~ dgamma(0.001, 0.001)
+}
+"
+
+# 示例数据
+jags_data_gamma <- list(
+  y = c(3.5, 7.2, 5.1, 12.8, 4.6),  # 住院天数（正连续）
+  severity = c(2, 4, 3, 5, 2),       # 疾病严重程度
+  comorbidity = c(0, 1, 0, 2, 1),    # 并发症数量
+  n = 5
+)
+```
+
+#### Beta分布 (dbeta) - 比例数据
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测治疗依从性比例
+model_beta <- "
+model {
+  for (i in 1:n) {
+    # Beta分布：0到1之间的比例
+    y[i] ~ dbeta(alpha[i], beta_param[i])
+    # 使用均值和精度参数化
+    alpha[i] <- mu[i] * phi
+    beta_param[i] <- (1 - mu[i]) * phi
+    logit(mu[i]) <- beta0 + beta1 * education[i] + beta2 * support[i]
+  }
+
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  beta1 ~ dnorm(0, 0.001)
+  beta2 ~ dnorm(0, 0.001)
+  phi ~ dgamma(0.001, 0.001)  # 精度参数
+}
+"
+
+# 示例数据
+jags_data_beta <- list(
+  y = c(0.8, 0.6, 0.9, 0.4, 0.7),    # 依从性比例（0-1）
+  education = c(12, 16, 18, 10, 14),   # 教育年限
+  support = c(3, 4, 5, 2, 3),         # 社会支持水平
+  n = 5
+)
+```
+
+####  多项分布 (dmulti) - 多类别结果
+
+```{r}
+#| echo: true
+#| eval: false
+# 预测疾病的多种分类结果
+model_multinomial <- "
+model {
+  for (i in 1:n) {
+    # 多项分布：多类别结果
+    y[i, 1:K] ~ dmulti(p[i, 1:K], trials[i])
+  
+    # 多logit链接函数
+    for (k in 1:(K-1)) {
+      log(p[i,k]/p[i,K]) <- beta0[k] + beta1[k] * age[i]
+    }
+  
+    # 约束条件
+    sum(p[i, 1:K]) <- 1
+  }
+
+  # 先验分布
+  for (k in 1:(K-1)) {
+    beta0[k] ~ dnorm(0, 0.001)
+    beta1[k] ~ dnorm(0, 0.001)
+  }
+}
+"
+
+# 示例数据（3个类别：轻度、中度、重度）
+jags_data_multi <- list(
+  y = matrix(c(5,3,2, 2,4,4, 7,2,1, 1,5,4, 6,3,1), ncol=3, byrow=TRUE),
+  trials = c(10, 10, 10, 10, 10),
+  age = c(30, 50, 25, 65, 40),
+  n = 5,
+  K = 3
+)
+```
+

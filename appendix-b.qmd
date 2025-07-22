@@ -1,0 +1,23 @@
+# 附录 B
+
+下表给出本书用到的一些统计术语的英文缩写。
+
+| 统计术语             | 英文                                      | 英文缩写 |
+|------------------|-----------------------------------|------------------|
+| 可信区间             | Credible Interval                         | CI       |
+| 线性模型             | Linear Models                             | LM       |
+| 广义线性模型         | Generalized Linear Models                 | GLM      |
+| 广义可加模型         | Generalized Additive Models               | GAM      |
+| 线性混合效应模型     | Linear Mixed-Effects Models               | LMM      |
+| 非线性混合效应模型   | Nonlinear Mixed-Effects Models            | NLME     |
+| 广义线性混合效应模型 | Generalized Linear Mixed-Effects Models   | GLMM     |
+| 广义可加混合效应模型 | Generalized Additive Mixed-Effects Models | GAMM     |
+| 集成嵌套拉普拉斯     | Integrated Nested Laplace approximation   | INLA     |
+| 马尔可夫链蒙特卡洛   | Markov Chain Monte Carlo                  | MCMC     |
+| 均方误差             | Mean Squared Error                        | MSE      |
+| 均方根误差           | Root Mean Squared Error                   | RMSE     |
+| 平均绝对误差         | Mean Absolute Error                       | MAE      |
+| 实际等效区域         | Region of Practical Equivalence           | ROPE     |
+| 有效样本量           | Effective Sample Size                     | ESS      |
+| 无掉头采样器         | No-U-Turn Sampler                         | NUTS     |
+| 哈密尔顿蒙特卡洛     | Hamiltonian Monte Carlo                   | HMC      |

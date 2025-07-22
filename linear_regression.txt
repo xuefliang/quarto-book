@@ -1,0 +1,27 @@
+
+model {
+  # 似然函数 - 正态分布用于连续变量
+  for (i in 1:n) {
+    y[i] ~ dnorm(mu[i], tau)
+    mu[i] <- beta0 + sum(beta[1:p] * X[i,1:p])
+  }
+  
+  # 先验分布
+  beta0 ~ dnorm(0, 0.001)
+  
+  for (j in 1:p) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+  
+  # 误差精度的先验
+  tau ~ dgamma(0.001, 0.001)
+  sigma <- 1/sqrt(tau)  # 标准差
+  
+  # 模型拟合度
+  for (i in 1:n) {
+    residual[i] <- y[i] - mu[i]
+    sq_residual[i] <- pow(residual[i], 2)
+  }
+  mse <- mean(sq_residual[])
+}
+

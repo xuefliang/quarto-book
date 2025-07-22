@@ -1,0 +1,168 @@
+# rstanarm 包
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(rstanarm)
+library(posterior)
+library(bayesplot)
+```
+
+rstanarm模拟了其他 R 模型拟合函数，但通过rstan包在后台使用Stan进行估计。rstanarm运行的是预编译的Stan代码，所以启动速度更快。其语法与lme4和brms更接近，但需要特定的函数调用来解锁包的预编译魔法。例如，如果想运行一个没有随机效应的简单线性模型，那么运行stan_lm。如果想运行没有随机效应的广义线性模型，那么使用 stan_glm。
+
+### 数据
+stroke数据来自一项针对住院卒中患者的研究。数据集包含226个入院患者的的7个变量,详见第三章。
+```{r}
+stroke <- read_dta("data/stroke.dta") |>  
+  mutate(across(where(is.labelled), as_factor)) |> 
+  zap_labels() |> 
+  mutate(stroke_type = relevel(stroke_type, ref = "Ischaemic Stroke"),
+  sex=relevel(sex,ref="female")) |> 
+  as_tibble()
+```
+
+## rstanarm实现
+rstanarm 分布族写法不同与brms包，更像传统R。
+```{r}
+# 定义公式
+formula <- status ~ gcs + sex + sbp + age + dm + stroke_type
+ 
+# 使用 rstanarm 拟合贝叶斯逻辑回归模型
+stroke_rstanarm <- stan_glm(
+  formula,   data = stroke,
+  family = binomial(link = "logit"),
+  refresh = 0,  seed = 123)
+ 
+# 查看模型摘要
+summary(stroke_rstanarm)
+
+#默认为80%的CI，可以这样获得95%CI
+ci_95 <- posterior_interval(stroke_rstanarm, prob = 0.95)
+print(ci_95)
+```
+
+结果和第三章中的类似，在影响卒中患者预后的因素中，格拉斯哥昏迷量表(GCS)评分和卒中类型显示出最明确的关联性。GCS评分的回归系数为-0.3（95%CI: -0.46至-0.24），表明GCS评分每增加1分，患者不良预后的风险显著降低约26%[exp(-0.3)≈0.74]。出血性卒中相比缺血性卒中显示出更高的不良预后风险，其回归系数为1.3（95%CI: 0.44至2.19），意味着出血性卒中患者的不良预后风险是缺血性卒中的3.7倍[exp(1.3)≈3.67]。
+
+添加随机效应和交互效应的示例代码如下
+```{r}
+#| echo: true
+#| eval: false
+stroke_rstanarm <- stan_glmer(
+  status ~ gcs + sex + sbp + age + dm + stroke_type + (1|hospital_id),
+  data = stroke,
+  family = binomial(link = "logit"),
+  refresh = 0
+)
+
+# 添加交互效应
+formula_interaction <- status ~ gcs + sex + sbp + age + dm + stroke_type + 
+                      gcs:age + sex:stroke_type
+
+stroke_rstanarm_interaction <- stan_glm(
+  formula_interaction,
+  data = stroke,
+  family = binomial(link = "logit"),
+  refresh = 0,
+  seed = 123
+)
+
+```
+
+### 数据
+继续使用第六章生存模型，对纵向和生存数据进行联合建模，以比较两种抗逆转录病毒药物在治疗对齐多夫定（AZT）疗法失败或不耐受的患者的疗效和安全性,包括1405个记录和 12个变量。
+
+```{r}
+data('aids.id',package = 'JM')
+data('aids',package = 'JM')
+```
+
+### rstanarm实现
+
+纵向模型假设CD4计数随时间变化，考虑药物治疗效果和个体随机效应。生存模型假设生存时间与药物、性别、既往机会性感染的关系。通过共享随机效应将两个模型连接起来，这样的联合建模可以更准确地评估治疗效果，因为它同时考虑了纵向生物标志物（CD4）和生存结局之间的关联。纵向模型的公式使用了lme4 包的公式风格进行指定，即 y ~ x + (random_effects | grouping_factor)。生存模型的公式使用 survival 包的公式风格指定，对于每个性别数据单独一行的数据，结果左侧的 ~ 需要以 Surv(event_time, event_indicator) 的格式表示。
+
+```{r}
+aids_rstan <- stan_jm(formulaLong = CD4 ~ obstime + drug * obstime + (1 + obstime | patient),
+                dataLong = aids,
+                formulaEvent = survival::Surv(Time, event) ~ drug + gender + prevOI,
+                dataEvent = aids.id,
+                time_var = "obstime", #指定了纵向数据中的时间变量名称
+                chains = 1, refresh = 0, seed = 123)
+
+summary(aids_rstan, probs = c(.025,.975))
+```
+
+基于AIDS数据的联合建模分析显示，CD4细胞计数随时间显著下降（每单位时间下降0.165，MAD_SD=0.023），而ddI药物治疗组相比对照组在基线时CD4水平稍高（0.446）但下降趋势相似。在生存分析中，较高的CD4水平与较低的死亡风险显著相关（风险比=0.772），男性患者的死亡风险显著低于女性（风险比=0.313），而既往有AIDS相关机会性感染史的患者死亡风险约为无感染史患者的2倍（风险比=2.098）；ddI治疗组虽然风险比为1.525，但95%CI包含1，提示治疗效果在统计学上可能不显著，这一联合建模方法成功地量化了CD4轨迹与生存结局之间的内在关联。
+
+如果希望纵向模型中在时间 t 的个体特异性斜率也作为关联结构的一部分,可以通过将 assoc 参数设置为一个字符向量 c("etavalue", "etaslope")来完成。
+```{r}
+aids_rstan2 <- stan_jm(formulaLong = CD4 ~ obstime + drug * obstime + (1 + obstime | patient),
+                dataLong = aids,
+                formulaEvent = survival::Surv(Time, event) ~ drug + gender + prevOI,
+                dataEvent = aids.id,
+                assoc = c("etavalue", "etaslope"),
+                time_var = "obstime", #指定了纵向数据中的时间变量名称
+                chains = 1, refresh = 0, seed = 123)
+
+summary(aids_rstan2, probs = c(.025,.975))
+```
+
+如果对两个反复测量的因变量感兴趣，以及它们与死亡风险的关系。研究者可能希望同时建模这两个因变量，考虑它们之间的相关性，并估计它们各自与死亡的对数风险的关联。将为每因变量拟合一个患者特异性截距和线性斜率的线性混合效应模型（使用身份链接，正态分布），但不包含其他协变量。在生存模型中，将性别（gender）和治疗（drug）作为基线协变量包括进来。假设在时间 t
+ ，每个因变量通过其在时间t的预期值与死亡的对数风险相关联（即当前值关联结构），要拟合的模型可以被指定为
+```{r}
+aids_rstan3 <- stan_jm(formulaLong = list(CD4 ~ obstime + drug * obstime + (1 + obstime | patient),as.numeric(AZT) ~ obstime + drug * obstime + (1 + obstime | patient)),
+                dataLong = aids,
+                formulaEvent = survival::Surv(Time, event) ~ drug + gender + prevOI,
+                dataEvent = aids.id,
+                assoc = c("etavalue", "etaslope"),
+                time_var = "obstime", #指定了纵向数据中的时间变量名称
+                chains = 1, refresh = 0, seed = 123)
+
+summary(aids_rstan3, probs = c(.025,.975))
+```
+
+Long1：CD4的截距均值为7.081（95%CI:7.079,7.084），时间效应为-0.099，表明CD4随时间下降；药物ddI的效应为0.613，且与时间交互效应为0.010，表明ddI对CD4有正向影响。模型残差标准差为4.281。Long2：AZT使用的截距均值为1.423，时间和药物效应接近0，表明AZT使用随时间和药物变化不大。Event：事件模型的截距为-14.113，药物ddI（0.392）、既往AIDS（1.977）增加事件风险，男性（-1.119）降低风险。B样条系数显示基线风险随时间变化。关联参数：Long1的etavalue（0.056）和etaslope（-0.037）表明CD4水平和斜率与事件风险弱相关；Long2的etavalue（0.672）显示AZT使用的正向关联，但etaslope（-5835.878）异常大，需进一步检查。随机效应：患者间变异显著，Long1截距方差为4.909，Long2截距方差为0.226，协方差显示Long1和Long2的随机效应存在负相关。诊断指标：部分参数的Rhat值较高（>1.1，如Long1的obstime:drugddI为2.212），表明链收敛性较差，可能需要更多迭代或重新参数化，说明对AZT进行多个因变量建模存在问题。
+
+## 后验预测
+
+### 对于样本内个体的预测个体特异性纵向轨迹
+使用 posterior_traj 函数可以获取个体特异性指标的预测值。它可以利用默认的 interpolate = TRUE 选项，在基线和个体事件或截尾时间之间的一系列等间距时间点上获取指标值。posterior_traj 默认返回一个数据框，其中包含对应于个体ID、时间、预测均值、95%置信区间，不确定性区间的水平可以通过 prob 参数进行更改。 
+
+m 参数指定我们想要预测的因变量（仅适用于多元联合模型）。 ids 参数是可选的，指定我们想要预测的个体子集。在绘图方法中， plot_observed = TRUE 指定我们希望在纵向轨迹图中包含观测到的生物标志物值。如果我们要将每个个体的轨迹向前外推到事件或截尾时间，那么可以通过在 posterior_traj 调用中指定 extrapolate = TRUE 轻松实现。
+```{r}
+p1 <- posterior_traj(aids_rstan3, m = 1, ids = 6:8)
+pp1 <- plot(p1, plot_observed = TRUE)
+pp1
+```
+
+```{r}
+p3 <- posterior_traj(aids_rstan3, m = 1, ids = 6:8, extrapolate = TRUE)
+pp3 <- plot(p3, plot_observed = TRUE, vline = TRUE)
+pp3
+```
+
+### 对于样本内个体的预测个体特异性生存曲线
+使用 posterior_survfit 函数可以获得个体特异性生存概率和/或生存曲线。默认情况下，函数返回包含个体 ID、时间以及预测的生存概率（后验均值和95%置信区间上下限）的数据框。置信区间的不确定性水平可以通过prob参数进行更改。默认情况下，个体特异性生存概率基于个体最后已知的生存时间进行计算。当我们预测模型估计时使用的个体（即样本内个体，其中不提供新的协变量数据）的生存概率时，个体的“最后已知生存时间”将是他们的事件或截尾时间。（注意，如果我们不希望条件于个体的最后已知生存时间，可以指定 condition = FALSE ，但我们可能不希望这样做，除非我们正在计算边际或标准化生存概率，这些将在稍后讨论）。
+
+默认参数 extrapolate =TRUE指定将在个体最后一次已知生存时间与估计样本中观察到的最大随访时间之间均匀间隔的时间点上计算个体特异性条件生存概率。可以通过control参数进一步控制外推行为。如果指定extrapolate=FALSE，则仅在指定的时间点（通过times参数指定，或默认为个体最后一次已知生存时间）上计算生存概率。
+
+例如，让我们绘制与上一个示例中使用的相同三个个体的预测个体特异性条件生存曲线。预测的生存曲线将在上述多变量联合模型下获得。
+```{r}
+p5 <- posterior_survfit(aids_rstan3, ids = 6:8)
+pp5 <- plot(p5)
+pp5
+```
+
+### 联合绘制的纵向轨迹和生存曲线图
+plot_stack_jm可以将个体特异性纵向轨迹的图表与个体特异性生存函数的图表结合在一起。
+```{r}
+plot_stack_jm(yplot = pp3, survplot = pp5)
+```
+
+### 标准化生存曲线
+posterior_survfit函数中的standardise=TRUE参数用于生成标准化生存曲线，函数首先为每个个体计算特异性的生存曲线，然后对所有个体的预测结果求平均，得到群体水平的标准化生存函数。时间点设定：由于需要在相同的时间点上对所有个体进行预测才能求平均，必须通过times参数明确指定预测的时间节点。例如，设定预测起始时间为0。自动时间扩展：当设置extrapolate =TRUE（默认选项）时，函数会自动在指定起始时间（如0）与数据中最大的事件时间或删失时间之间，均匀生成10个时间点进行预测。
+```{r}
+p1 <- posterior_survfit(aids_rstan3, standardise = TRUE, times = 0)
+head(p1) # data frame with standardised survival probabilities
+plot(p1)
+```
+

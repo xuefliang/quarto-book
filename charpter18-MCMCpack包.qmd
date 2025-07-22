@@ -1,0 +1,215 @@
+# MCMCpack 包
+```{r}
+#| warning: false
+#| echo: false
+source('scripts/utils.R')
+library(MCMCpack)
+```
+
+MCMCpack 旨在利用后验模拟（posterior simulation） 为各种统计模型执行贝叶斯推断（Bayesian inference）。该包中的采样算法是针对特定模型类别手工编写的，因此比WinBUGS等方法效率更高，并且对条件不佳或异常数据具有鲁棒性。几乎所有的MCMC采样过程都在编译后的C++代码中完成，并通过R进行调用。MCMCpack拟合函数设计得与R中相应的经典估计函数尽可能相似，这大大降低了用户的学习曲线。例如，线性回归的lm()对应Bayesian线性回归的 MCMCregress()。MCMCpack 的输出对象被格式化为coda mcmc 对象，可以与coda 包无缝集成，用于收敛性评估、后验摘要和数据可视化。
+
+## 使用 MCMC 进行贝叶斯推断
+
+MCMCpack 主要通过马尔可夫链蒙特卡洛(MCMC)方法进行后验模拟。MCMC方法被认为是近年来统计计算中最重要的发展，它使得统计学家能够拟合各种概率模型。该包通过从后验分布中生成样本来执行贝叶斯推断，大多数模拟都在编译后的 C++ 代码中完成，这些代码是基于 Scythe Statistical Library 版本编写的所有模型都会返回 coda mcmc 对象，这些对象可以使用 coda 包进行后续的摘要和分析。
+MCMCpack 中的模型拟合函数遵循 R 的标准模型接口，例如： 经典线性回归：lm(y ~ x1 + x2 + x3, data = mydata)
+可对应MCMCpack 线性回归：MCMCregress(y ~ x1 + x2 + x3, data = mydata)这种统一的接口设计，使得用户在熟悉一个函数后，可以迅速掌握其他函数的使用。MCMCpack提供了丰富多样的统计模型，涵盖了多个领域。以下是其主要模型类别及其示例函数：
+线性回归模型：高斯线性回归 (MCMCregress)：使用高斯误差，并支持多元高斯先验和逆伽马先验。奇异值分解回归 (MCMCSVDreg)：适用于设计矩阵被奇异值分解的情况。删失因变量回归(MCMCtobit)：处理因变量可能从下方、上方或双向删失的情况。
+
+离散选择模型：Logistic 回归 (MCMClogit)：使用随机游走 Metropolis 算法进行后验模拟。多项Logistic回归(MCMCmnl)：处理多项选择模型，支持选择特定协变量和个体特定协变量。有序Probit回归(MCMCoprobit)：使用数据增强方法，处理有序分类因变量。Probit回归(MCMCprobit)：使用数据增强方法进行后验模拟。
+
+测量模型 (Item Response Theory,IRT/Factor Analysis)：一维IRT模型(MCMCirt1d)：适用于一维潜在空间，对能力参数和项目参数使用 Normal 先验。K维IRT 模型 (MCMCirtKd)：扩展到 K 维潜在空间。K 维稳健 IRT 模型 (MCMCirtKdRob)：支持 Logistic 链接函数和稳健推断。
+K 维有序因子模型 (MCMCordfactanal)：适用于有序数据因子分析。K 维线性因子模型 (MCMCfactanal)：用于正态理论因子分析。K维混合因子模型(MCMCmixfactanal)：处理连续和有序混合数据类型。层次一维IRT模型 (MCMCirtHier1d)：潜在能力参数由协变量预测的层次模型。
+
+计数模型：Poisson 回归 (MCMCpoisson)：使用随机游走 Metropolis 算法进行后验模拟。负二项回归 (MCMCnegbin)：通过辅助混合采样进行后验模拟。生态推断模型：层次生态推断模型(MCMChierEI)：针对部分观测的 2x2 列联表。 动态生态推断模型 (MCMCdynamicEI)：考虑时间依赖性。
+
+时间序列/变点问题模型：二元变点模型 (MCMCbinaryChange)：处理二元数据中的多重变点。Poisson 回归变点模型 (MCMCpoissonChange)：处理 Poisson 回归模型中的多重变点。有序 Probit 变点回归模型 (MCMCoprobitChange)：处理有序 Probit 回归模型中的多重变点。线性高斯变点模型 (MCMCprobitChange, 但其描述为线性高斯模型)：处理线性高斯模型中的多重变点。负二项回归变点模型 (MCMCnegbinChange)：处理负二项回归模型中的多重变点。 高斯线性回归变点模型 (MCMCregressChange)：处理高斯线性回归模型中的多重变点。隐藏马尔可夫固定效应模型 (HMMpanelFE)：适用于面板数据。
+
+隐藏马尔可夫随机效应模型 (HMMpanelRE)：适用于面板数据。层次 Poisson 线性回归模型 (MCMChpoisson)：使用 log 链接函数。 层次 Logistic 线性回归模型 (MCMChlogit)：使用 logit 链接函数。层次高斯线性回归模型 (MCMChregress)：用于层次高斯线性回归模型。成对比较模型：  一维成对比较模型 (MCMCpaircompare)：带有 Probit 链接函数。二维成对比较模型 (MCMCpaircompare2d)：项目潜在属性为二维欧几里得空间中的向量。带 Dirichlet 过程先验的二维成对比较模型 (MCMCpaircompare2dDP)：引入 Dirichlet 过程先验。
+
+MCMCpack 不仅提供模型拟合功能，还包含一系列有用的实用工具函数和统计分布：
+
+统计分布：
+    Dirichlet 分布：提供密度函数 (ddirichlet) 和随机生成器 (rdirichlet)。
+    逆伽马分布 (InvGamma)：提供密度函数 (dinvgamma) 和随机生成器 (rinvgamma)。
+    逆 Wishart 分布 (InvWishart)：提供密度函数 (diwish) 和随机生成器 (riwish)。
+    非中心超几何分布 (NoncenHypergeom)：评估密度和生成随机数。
+    Wishart 分布 (Wishart)：提供密度函数 (dwish) 和随机生成器 (rwish)。
+通用 Metropolis 采样算法：
+    MCMCmetrop1R：允许用户从自定义的连续分布中进行采样，使用随机游走 Metropolis 算法。用户只需提供目标密度作为 R 函数，采样本身在 C++ 中完成，运行速度快。
+模型比较工具：
+    BayesFactor：根据 MCMCpack 的输出（需要 logmarglike 属性）创建 BayesFactor 对象，用于比较模型。
+    PostProbMod：计算给定模型集的后验概率。
+    make.breaklist：根据 testpanelSubjectBreak 的输出生成变点向量，通过 Bayes Factor 进行模型比较。
+可视化工具：
+    dtomogplot：生成动态层析图，适用于时间序列的 2x2 列联表。
+    tomogplot：生成静态层析图。
+    plotChangepoint：绘制变点模型的后验变点概率密度图。
+    plotHDPChangepoint：绘制 HDP-HMM 模型的后验变点概率图。
+    plotState：绘制每个时间点处于每个状态的后验概率。
+    plot.qrssvs：绘制分位数回归随机搜索变量选择 (QR-SSVS) 的输出。
+数据处理工具：
+    choicevar：处理多项选择模型中的选择特定协变量。
+    vech：从对称矩阵中提取下三角元素。
+    xpnd：将向量扩展为对称矩阵，可用于恢复 vech 提取的元素。
+    read.Scythe 和 write.Scythe：用于读写 Scythe Statistical Library 格式的文件。
+    mptable 和 topmodels：用于 SSVSquantreg 输出的摘要和模型选择。
+教学用“玩具”模型：
+    MCbinomialbeta：二项似然与 Beta 先验的蒙特卡洛模拟。
+    MCmultinomdirichlet：多项似然与 Dirichlet 先验的蒙特卡洛模拟。
+    MCnormalnormal：已知方差的 Normal 似然与 Normal 先验的蒙特卡洛模拟。
+    MCpoissongamma：Poisson 似然与 Gamma 先验的蒙特卡洛模拟。
+
+### 线性回归
+
+#### 数据集
+还是使用第二章中 STATA 格式的 coronary.dta 数据集。
+```{r}
+coronary <- read_dta("data/coronary.dta") |> 
+  as_factor()
+```
+
+默认使用非信息性先验，这里使用弱信息性先验拟合贝叶斯线性回归模型 (MCMCregress)。MCMCregress 默认使用多元正态先验对 $\boldsymbol{\beta}$ 进行推断，并使用逆伽马先验对条件误差方差 $\sigma^2$ 进行推断。
+
+模型形式为：
+$$y_i = \mathbf{x}_i^T \boldsymbol{\beta} + \varepsilon_i$$
+
+其中误差 $\varepsilon_i \sim \mathcal{N}(0, \sigma^2)$。先验分布设定
+$$\boldsymbol{\beta} \sim \mathcal{N}(\boldsymbol{\beta}_0, \mathbf{B}_0^{-1})$$
+$$\sigma^2 \sim \text{IG}(c_0/2, d_0/2)$$
+
+其中：
+- $\boldsymbol{\beta}_0$ 是 $\boldsymbol{\beta}$ 的先验均值向量
+- $\mathbf{B}_0$ 是 $\boldsymbol{\beta}$ 的先验精度矩阵
+- $\text{IG}(c_0/2, d_0/2)$ 表示形状参数为 $c_0/2$，尺度参数为 $d_0/2$ 的逆伽马分布
+
+```{r}
+chol_mcmc <- MCMCregress(chol ~ dbp + bmi + race, data = coronary,
+                         b0 = 0, # beta 的先验均值
+                         B0 = 0.1, # beta 的先验精度
+                         c0 = 2, # sigma^2 的逆伽马先验形状参数
+                         d0 = 0.11, # sigma^2 的逆伽马先验尺度参数
+                         marginal.likelihood = "Chib95" # 使用 Chib (1995) 方法计算边际似然
+                         )
+```
+
+MCMCpack 的模型拟合函数会将输出存储为 coda mcmc 对象。诊断图：使用 plot() 方法生成每个参数的迹图 (trace plot) 和密度图 (density plot)，用于评估马尔可夫链的收敛性。使用 summary() 方法计算每个变量的经验均值、标准差、分位数等，并生成表格摘要。输出将包括迭代次数、稀疏间隔、链数、每条链的样本大小，以及每个变量的均值、标准差、标准误差和分位数。贝叶斯方法的主要优点是可以通过 MCMC 输出直接进行后验推断。
+```{r}
+plot(chol_mcmc)
+summary(chol_mcmc)
+```
+
+从后验分布的均值来看，舒张压（dbp）与胆固醇水平呈显著正相关（均值=0.031，95%可信区间：0.019-0.043），说明血压越高，胆固醇水平越高。BMI与胆固醇呈轻微负相关（均值=-0.025），但其95%可信区间（-0.077到0.028）包含零，表明这种关联不够确定。种族差异方面，相比参照组，中国人的胆固醇水平平均高出0.35个单位（95%可信区间：-0.001到0.714），而印度人的胆固醇水平显著更高，平均高出0.71个单位（95%可信区间：0.336到1.083），显示出明显的种族差异。模型的残差方差（sigma2）为1.09，表明模型解释了数据中的大部分变异。所有参数的时间序列标准误与朴素标准误非常接近，说明MCMC链收敛良好，结果可靠。
+
+#### 模型比较 (BayesFactor)
+
+MCMCpack 还为部分模型提供了贝叶斯因子 (Bayes factors)工具，用于比较给定相同数据的不同模型，贝叶斯因子的计算依赖于边际似然 (marginal likelihoods)。
+```{r}
+model1 <- MCMCregress(chol ~ dbp + bmi, data = coronary,
+                      mcmc = 10000, b0 = 0, B0 = 0.1, c0 = 2, d0 = 0.11, marginal.likelihood = "Chib95")
+model2 <- MCMCregress(chol ~ dbp + bmi + race, data = coronary,
+                      mcmc = 10000, b0 = 0, B0 = 0.1, c0 = 2, d0 = 0.11, marginal.likelihood = "Chib95")
+model3 <- MCMCregress(chol ~ dbp  + race, data = coronary,
+                       mcmc = 10000, b0 = 0, B0 = 0.1, c0 = 2, d0 = 0.11, marginal.likelihood = "Chib95")
+```
+
+使用 BayesFactor 函数比较这些模型
+```{r}
+BF <- BayesFactor(model1, model2, model3)
+# 查看贝叶斯因子矩阵
+summary(BF) 
+```
+
+summary(BF) 的输出是一个贝叶斯因子矩阵，其中元素 i, j 包含模型 i 相对于模型 j 的贝叶斯因子。Jeffreys 的规则可以帮助解释贝叶斯因子的强度。例如，如果模型 2 相对于其他模型有更高的贝叶斯因子，则表明模型 2 得到的数据支持更强。
+
+### 层次贝叶斯模型
+使用第四章sleepstudy睡眠数据。
+
+```{r}
+data(sleepstudy,package = "lme4")
+```
+
+MCMChregress 拟合层次高斯线性回归模型，固定效应参数为多变量正态先验，随机效应协方差矩阵为逆威布尔先验，残差误差方差为供逆伽玛先验，返回的后验分布样本作为 mcmc 对象。
+
+```{r}
+sleep_hlm <- MCMChregress(fixed = Reaction ~ Days, 
+                         random = ~ 1 + Days,  # 添加随机截距
+                         group = "Subject", 
+                         data = sleepstudy, 
+                         r = 2, R = diag(2))
+summary(sleep_hlm)
+```
+
+r=2：对应截距和斜率两个随机效应，R=diag(2)：2×2对角先验协方差矩阵。使用Gibbs采样器进行贝叶斯推断
+，这个过程生成后验分布的样本
+
+```{r}
+# 查看参数估计
+summary(sleep_hlm$mcmc)
+ 
+# 查看预测值
+head(sleep_hlm$Y.pred)
+ 
+# 绘制MCMC轨迹图
+# plot(sleep_hlm$mcmc)
+ 
+# 查看参数的后验统计
+library(coda)
+effectiveSize(sleep_hlm$mcmc)  # 有效样本量
+geweke.diag(sleep_hlm$mcmc)    # 收敛诊断
+```
+
+### 变点模型示例 (MCMCpoissonChange)
+
+变点模型是时间序列模型，其中数据从多个状态或机制生成。以第九章AirPassengers 数据集为例
+
+```{r}
+data(AirPassengers,package = 'datasets')
+
+air_df <- data.frame(
+  y = AirPassengers,
+  time = 1:length(AirPassengers)
+)
+ 
+# 调整超参数以匹配数据规模
+mean_air <- mean(AirPassengers)  # 计算均值作为参考
+c0 <- mean_air  # 设置c0为数据均值
+d0 <- 1
+```
+
+MCMCpoissonChange 需要指定数据、状态数 (m) 和 lambda 的超参数 (c0 和 d0)
+注意：进行模型比较时，应避免使用漫无目的的先验 (diffuse priors)
+
+```{r}
+model_m1 <- MCMCpoissonChange(y ~ 1, data = air_df, m = 1, 
+                              c0 = c0, d0 = d0,
+                              marginal.likelihood = "Chib95")
+ 
+model_m2 <- MCMCpoissonChange(y ~ 1, data = air_df, m = 2, 
+                              c0 = c0, d0 = d0,
+                              marginal.likelihood = "Chib95")
+ 
+model_m3 <- MCMCpoissonChange(y ~ 1, data = air_df, m = 3, 
+                              c0 = c0, d0 = d0,
+                              marginal.likelihood = "Chib95")
+```
+
+比较模型
+```{r}
+BF_poisson <- BayesFactor(model_m1, model_m2, model_m3)
+summary(BF_poisson)
+```
+
+通过比较不同 m 值（变点数）下的边际似然，可以确定最合适的变点数。例如，如果第六个变点模型被数据支持得最好，则表明数据存在六个变点。
+可视化变点模型输出：
+```{r}
+#生成后验状态概率图，显示每个时间点属于各个状态的后验概率。
+plotState(model_m3) 
+#绘制后验变点概率图，显示变点发生时间点的概率密度。
+plotChangepoint(model_m3) 
+```
+
+MCMCpack 的模拟是在编译后的C++代码中完成的，以最大化效率。使用后验样本进行推断之前，务必检查马尔可夫链的收敛性。coda 包提供了许多标准收敛诊断方法，与MCMCpack输出兼容。在进行模型比较时，先验的指定尤为重要。漫无目的的先验 (diffuse priors) 通常无法识别边际似然，在模型比较中应避免使用。IRT模型这样的测量模型，通常需要对参数施加适当的约束才能识别。例如MCMCirt1d通过对能力参数施加约束来识别模型，而MCMCirtKd则通过对项目参数施加约束。对于包含大量个体或项目的大型数据集，存储因子得分 (store.scores)、项目参数 (store.item) 或能力参数 (store.ability) 可能占用大量内存，在这种情况下，建议进行重度稀疏 (thinning) 或仅在必要时存储这些参数。
+
+
+
+
